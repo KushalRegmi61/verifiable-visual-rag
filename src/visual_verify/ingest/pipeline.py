@@ -46,6 +46,9 @@ def ingest_pdf(
         doc = open_and_check(pdf_path, min_text_page_ratio=min_text_page_ratio)
     except GateError as exc:
         sink.fail_document(sha, str(pdf_path), exc.reason, exc.detail)
+        # Without this the rejection record is rolled back with the raise, and
+        # the corpus loses its only evidence that this file was ever seen.
+        sink.checkpoint()
         raise
 
     try:
@@ -78,10 +81,14 @@ def ingest_pdf(
                 ),
                 boxes,
             )
+            # Commit per page, not per document. This is the line that turns the
+            # resumability promise above into something a crash cannot undo.
+            sink.checkpoint()
             written += 1
 
         if written + skipped == doc.page_count:
             sink.finish_document(sha)
+            sink.checkpoint()
 
         return IngestResult(
             sha256=sha,

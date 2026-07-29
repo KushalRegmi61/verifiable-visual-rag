@@ -40,6 +40,15 @@ class Sink(Protocol):
 
     def write_page(self, sha256: str, page: PageRecord, boxes: list[BoxRecord]) -> None: ...
 
+    def checkpoint(self) -> None:
+        """Durably persist everything written so far.
+
+        Called by the pipeline after each page. This is what makes resumption
+        real: without it a crash rolls back the whole document and done_pages
+        returns empty on the next run.
+        """
+        ...
+
     def finish_document(self, sha256: str) -> None: ...
 
     def fail_document(self, sha256: str, path: str, reason: RejectReason, detail: str) -> None:
@@ -78,6 +87,9 @@ class MemorySink:
         self.pages.append(page)
         self.boxes_by_page[(sha256, page.page_no)] = boxes
         self.done.add((sha256, page.page_no))
+
+    def checkpoint(self) -> None:
+        """No-op: the dict is already as durable as a test double needs to be."""
 
     def finish_document(self, sha256: str) -> None:
         self.finished.add(sha256)

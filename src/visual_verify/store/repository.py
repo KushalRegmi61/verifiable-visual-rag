@@ -68,6 +68,10 @@ class SqlSink:
             Job(doc_sha=sha256, stage="page", state="done", page_no=page.page_no)
         )
 
+    def checkpoint(self) -> None:
+        """Commit. The pipeline calls this per page so a crash cannot undo them."""
+        self.session.commit()
+
     def finish_document(self, sha256: str) -> None:
         doc = self.session.get(Document, sha256)
         if doc is not None:
@@ -80,15 +84,22 @@ class SqlSink:
 
         The gate runs before begin_document, so this may be the first time the
         store sees this document. Upsert the Document row so the rejected path
-        is queryable, and append a Job row so repeated attempts are visible as
-        a log rather than silently overwriting each other.
+        is queryable, and append a Job row so repeated attempts are a log rather
+        than silently overwriting each other.
+
+        An already-indexed document is NOT downgraded to failed. Identity is the
+        content hash, so a re-gate failing means the gate changed its mind, not
+        that the stored pages became invalid. Flipping the status while leaving
+        the pages in place would leave the store in an uninterpretable state
+        (status=failed with pages_done=n_pages). The Job row still records the
+        attempt.
         """
         doc = self.session.get(Document, sha256)
         if doc is None:
             self.session.add(
                 Document(sha256=sha256, path=path, n_pages=0, status="failed")
             )
-        else:
+        elif doc.status != "indexed":
             doc.status = "failed"
         self.session.add(
             Job(
@@ -124,5 +135,9 @@ def document_status(session: Session) -> list[DocumentStatus]:
             pages_done=counts.get(d.sha256, 0),
             status=d.status,
         )
-        for d in session.scalars(select(Document).order_by(Document.created_at))
+        # sha256 is the tiebreaker: same-second inserts would otherwise order
+        # nondeterministically, which makes CLI output diffs noisy for no reason.
+        for d in session.scalars(
+            select(Document).order_by(Document.created_at, Document.sha256)
+        )
     ]

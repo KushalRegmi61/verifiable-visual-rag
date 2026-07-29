@@ -98,6 +98,11 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             render_item=render_item,
+            # SQLite cannot ALTER a constraint into existence: adding the jobs
+            # foreign key raises NotImplementedError without this. Batch mode
+            # rebuilds the table via copy-and-move instead. It is a no-op on
+            # Postgres, which alters in place.
+            render_as_batch=connection.dialect.name == "sqlite",
         )
 
         with context.begin_transaction():

@@ -54,3 +54,18 @@ def test_migration_creates_the_page_uniqueness_index(tmp_path, monkeypatch):
     indexes = inspect(create_engine(f"sqlite:///{db}")).get_indexes("pages")
     unique_cols = [set(i["column_names"]) for i in indexes if i["unique"]]
     assert {"doc_sha", "page_no"} in unique_cols
+
+
+def test_no_model_migration_drift(tmp_path, monkeypatch):
+    """The strongest possible drift assertion, in one line.
+
+    Runs against a throwaway database upgraded to head rather than the developer's
+    own data/index.db, so the result depends on the migrations alone and not on
+    whatever state the local file happens to be in.
+    """
+    db = tmp_path / "drift.db"
+    _upgrade_to(db, monkeypatch)
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(ALEMBIC_INI.parent / "migrations"))
+    command.check(cfg)  # raises if the models and migrations disagree

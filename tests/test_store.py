@@ -211,3 +211,73 @@ def test_created_at_round_trips_as_aware(tmp_path):
         assert got.created_at.tzinfo is not None
         # Must be comparable to an aware datetime without raising.
         assert (datetime.now(UTC) - got.created_at).total_seconds() < 60
+
+
+def test_fail_does_not_downgrade_an_indexed_document(session):
+    sink = SqlSink(session)
+    sink.begin_document(DocumentRecord(sha256="abc123", path="/x.pdf", n_pages=1))
+    sink.finish_document("abc123")
+    session.commit()
+
+    sink.fail_document("abc123", "/x.pdf", RejectReason.NO_TEXT_LAYER, "gate retuned")
+    session.commit()
+
+    assert session.get(Document, "abc123").status == "indexed"
+    assert session.scalar(select(func.count()).select_from(Job).where(Job.state == "failed")) == 1
+
+
+def test_crash_mid_document_leaves_completed_pages_durable(multipage_pdf, tmp_path, monkeypatch):
+    """The pipeline promises resumption; without a per-page commit it cannot deliver."""
+    from visual_verify.ingest import pipeline as pipeline_module
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'crash.db'}")
+    Base.metadata.create_all(engine)
+
+    real_render = pipeline_module.render_page
+    calls = {"n": 0}
+
+    def flaky(page, out_path, dpi):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("simulated crash on page 3")
+        return real_render(page, out_path, dpi)
+
+    monkeypatch.setattr(pipeline_module, "render_page", flaky)
+
+    with Session(engine) as s:
+        with pytest.raises(OSError):
+            ingest_pdf(multipage_pdf, SqlSink(s), pages_dir=tmp_path, dpi=72)
+
+    # A fresh session must see the two pages that completed before the crash.
+    with Session(engine) as s:
+        assert s.scalar(select(func.count()).select_from(Page)) == 2
+
+    monkeypatch.setattr(pipeline_module, "render_page", real_render)
+    with Session(engine) as s:
+        result = ingest_pdf(multipage_pdf, SqlSink(s), pages_dir=tmp_path, dpi=72)
+        assert result.pages_written == 1
+        assert result.pages_skipped == 2
+
+
+def test_naive_datetime_is_rejected_and_offsets_are_normalized(tmp_path):
+    """The behavior most likely to surprise a caller, currently untested."""
+    from datetime import UTC, datetime, timedelta, timezone
+
+    from sqlalchemy.exc import StatementError
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'tz2.db'}")
+    Base.metadata.create_all(engine)
+
+    npt = timezone(timedelta(hours=5, minutes=45))
+    with Session(engine) as s:
+        s.add(Document(sha256="b" * 64, path="/x.pdf", n_pages=1,
+                       created_at=datetime(2026, 1, 1, 12, 0, tzinfo=npt)))
+        s.commit()
+        got = s.get(Document, "b" * 64)
+        assert got.created_at == datetime(2026, 1, 1, 6, 15, tzinfo=UTC)
+
+    with Session(engine) as s:
+        s.add(Document(sha256="c" * 64, path="/y.pdf", n_pages=1,
+                       created_at=datetime(2026, 1, 1, 12, 0)))
+        with pytest.raises(StatementError):
+            s.commit()
