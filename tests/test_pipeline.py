@@ -176,3 +176,11 @@ def test_page_record_dimensions_match_the_written_png(born_digital_pdf, tmp_path
 
     page = sink.pages[0]
     assert Image.open(tmp_path / page.image_path).size == (page.width_px, page.height_px)
+
+
+def test_refuses_to_mix_dpi_within_a_document(multipage_pdf, tmp_path):
+    sink = MemorySink()
+    ingest_pdf(multipage_pdf, sink, pages_dir=tmp_path, dpi=72, max_pages=1)
+
+    with pytest.raises(ValueError, match="already has pages rendered at 72 dpi"):
+        ingest_pdf(multipage_pdf, sink, pages_dir=tmp_path, dpi=150)

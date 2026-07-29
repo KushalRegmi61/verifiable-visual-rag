@@ -14,14 +14,25 @@ from PIL import Image, ImageDraw
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from visual_verify import derive
 from visual_verify.config import Settings
+from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError
 from visual_verify.ingest.pipeline import ingest_pdf
 from visual_verify.store.engine import make_engine
 from visual_verify.store.models import Box, Document, Page
 from visual_verify.store.repository import SqlSink, document_status
 
-BOX_COLORS = {"word": (0, 131, 215), "table_cell": (244, 88, 19)}
+BOX_COLORS = {
+    "word": (0, 131, 215),
+    "table_cell": (244, 88, 19),
+    "line": (120, 94, 240),
+    "block": (100, 100, 100),
+    # Deliberately the loudest colour in the set: a --find overlay is the
+    # project's central claim rendered as a picture, and it should read as
+    # different in kind from a routine box dump.
+    "span": (26, 176, 80),
+}
 
 
 def _ensure_schema(settings: Settings) -> None:
@@ -42,10 +53,20 @@ def _ensure_schema(settings: Settings) -> None:
     # stops migrations/env.py from reapplying alembic.ini's INFO level on top.
     logging.getLogger("alembic").setLevel(logging.WARNING)
 
-    ini = Path(__file__).resolve().parent.parent.parent / "alembic.ini"
+    # Resolved from the package directory, not by counting .parent calls up into
+    # a source tree. alembic.ini and migrations/ ship inside the package, so this
+    # is the same path in a checkout and in an installed wheel; the old
+    # parent.parent.parent landed on site-packages/ and every subcommand died
+    # with "Path doesn't exist: .../migrations".
+    ini = Path(__file__).resolve().parent / "alembic.ini"
     cfg = Config(str(ini))
     cfg.attributes["configure_logger"] = False
     cfg.set_main_option("script_location", str(ini.parent / "migrations"))
+    # env.py also derives the URL from Settings.from_env(), but relying on that
+    # made settings a silently unused argument here. ConfigParser reads "%" as
+    # interpolation syntax, and a managed-Postgres password routinely contains
+    # one, so it must be doubled.
+    cfg.set_main_option("sqlalchemy.url", settings.db_url.replace("%", "%%"))
     command.upgrade(cfg, "head")
 
 
@@ -60,7 +81,7 @@ def _session(settings: Settings) -> Session:
     return Session(make_engine(settings.db_url))
 
 
-def _ingest_one(path: Path, sink: SqlSink, settings: Settings, dpi: int) -> bool:
+def _ingest_one(path: Path, sink: SqlSink, session: Session, settings: Settings, dpi: int) -> bool:
     try:
         result = ingest_pdf(
             path,
@@ -74,6 +95,13 @@ def _ingest_one(path: Path, sink: SqlSink, settings: Settings, dpi: int) -> bool
         return False
     except GateError as exc:
         print(f"  {path.name}: rejected ({exc})")
+        return False
+    except Exception as exc:  # noqa: BLE001 - one bad file must not abort a batch
+        # A PermissionError, a full disk, or a PyMuPDF failure on file 3 of 50
+        # must not cost the remaining 47. The pipeline checkpoints per page, so
+        # this rollback discards only the incomplete tail of this one document.
+        session.rollback()
+        print(f"  {path.name}: failed ({type(exc).__name__}: {exc})")
         return False
     print(
         f"  {path.name}: {result.pages_written} pages written, "
@@ -98,8 +126,12 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     with _session(settings) as session:
         sink = SqlSink(session)
         for path in targets:
-            if _ingest_one(path, sink, settings, dpi):
+            if _ingest_one(path, sink, session, settings, dpi):
                 ok += 1
+            # Kept even though the pipeline checkpoints per page: the final
+            # finish_document only checkpoints when every page was accounted
+            # for, so a --max-pages-style partial run would otherwise leave the
+            # last status update sitting uncommitted in the session.
             session.commit()
 
     return 0 if ok == len(targets) else 1
@@ -153,6 +185,26 @@ def _resolve_document(session: Session, needle: str) -> Document | None | list[D
     return matches
 
 
+def _to_record(b: Box) -> BoxRecord:
+    """Re-hydrate a stored Box row into the dataclass derive works over.
+
+    Kept here rather than in the store: derive is a pure core function and must
+    not learn about ORM rows, and the CLI is the only thing that reads boxes
+    back out again.
+    """
+    return BoxRecord(
+        kind=b.kind,
+        x0=b.x0,
+        y0=b.y0,
+        x1=b.x1,
+        y1=b.y1,
+        text=b.text,
+        block_no=b.block_no,
+        line_no=b.line_no,
+        word_no=b.word_no,
+    )
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     """Draw stored boxes over the rendered page.
 
@@ -181,12 +233,30 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             print(f"no page {args.page} in {Path(doc.path).name}")
             return 1
 
-        boxes = list(session.scalars(select(Box).where(Box.page_id == page.id)))
+        stored = [_to_record(b) for b in session.scalars(select(Box).where(Box.page_id == page.id))]
         doc_name = Path(doc.path).name
         page_no = page.page_no
         image_path = settings.pages_dir / page.image_path
 
-    print(f"{doc_name} page {page_no}: {len(boxes)} boxes")
+    print(f"{doc_name} page {page_no}: {len(stored)} boxes")
+
+    if args.find:
+        # The live demonstration of the project's claim: name a phrase, get the
+        # rectangles that cover it. span_boxes splits at line breaks rather than
+        # returning one union, so a wrapped phrase does not sweep in the words
+        # between its two halves.
+        boxes = derive.span_boxes(stored, args.find) if stored else []
+        if not boxes:
+            print(f"phrase {args.find!r} not found on this page")
+            return 0
+        print(f"{len(boxes)} rect(s) match {args.find!r}")
+    elif args.kind == "word":
+        boxes = stored
+    else:
+        derived = derive.line_boxes if args.kind == "line" else derive.block_boxes
+        boxes = derived(stored) if stored else []
+        print(f"{len(boxes)} {args.kind} boxes derived from {len(stored)} stored boxes")
+
     if not args.overlay:
         return 0
 
@@ -222,6 +292,16 @@ def build_parser() -> argparse.ArgumentParser:
         "doc", help="document sha256 (or a prefix of it) or a substring of its path"
     )
     p_inspect.add_argument("--page", type=int, default=0)
+    p_inspect.add_argument(
+        "--kind",
+        choices=["word", "line", "block"],
+        default="word",
+        help="granularity to overlay; line and block are derived from word boxes",
+    )
+    p_inspect.add_argument(
+        "--find",
+        help="draw only the rects covering this phrase (overrides --kind)",
+    )
     p_inspect.add_argument("--overlay", help="write a PNG with boxes drawn on the page")
     p_inspect.set_defaults(func=cmd_inspect)
 

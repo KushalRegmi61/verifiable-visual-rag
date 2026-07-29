@@ -89,4 +89,26 @@ def test_real_pdf_boxes_land_on_ink(tmp_path):
             on_ink += 1
 
     assert len(boxes) > 20, "expected a text-bearing page"
+
+    # Control: the same boxes displaced must NOT land on ink. Without this,
+    # "every box contains ink" could hold trivially on a dense page. Measured on
+    # proposal.pdf page 3: true 60/60, shifted 25% in x 16/60, in y 13/60.
+    displaced = 0
+    dx = int(0.25 * width_px)
+    for b in boxes:
+        crop = img.crop(
+            (
+                int(b.x0 * width_px) + dx,
+                int(b.y0 * height_px),
+                int(b.x1 * width_px) + dx,
+                int(b.y1 * height_px),
+            )
+        )
+        if crop.getbbox() is not None and crop.getextrema()[0] < 128:
+            displaced += 1
+
     assert on_ink == len(boxes), f"only {on_ink}/{len(boxes)} boxes contained ink"
+    assert displaced < len(boxes) // 2, (
+        f"{displaced}/{len(boxes)} displaced boxes also hit ink; "
+        "the alignment assertion is not discriminating on this page"
+    )

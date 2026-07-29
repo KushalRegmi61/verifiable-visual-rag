@@ -152,3 +152,75 @@ def test_engine_enforces_foreign_keys(tmp_path, monkeypatch):
 
     with _session(Settings.from_env()) as s:
         assert s.execute(text("PRAGMA foreign_keys")).scalar() == 1
+
+
+def test_directory_ingest_survives_an_unexpected_error(
+    multipage_pdf, born_digital_pdf, tmp_path, monkeypatch, capsys
+):
+    """A non-gate failure on one file must not abandon the rest of the batch."""
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'i.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "data"))
+
+    from visual_verify import cli as cli_module
+
+    real = cli_module.ingest_pdf
+
+    def explode_on_multipage(path, *a, **kw):
+        if "multipage" in str(path):
+            raise PermissionError("simulated disk failure")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(cli_module, "ingest_pdf", explode_on_multipage)
+
+    rc = main(["ingest", "--dir", str(multipage_pdf.parent), "--dpi", "72"])
+    out = capsys.readouterr().out
+
+    assert rc == 1
+    assert "PermissionError" in out
+    assert "born_digital.pdf" in out and "1 pages written" in out
+
+
+def test_inspect_find_draws_a_span(born_digital_pdf, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'i.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "data"))
+    main(["ingest", str(born_digital_pdf), "--dpi", "72"])
+    capsys.readouterr()
+
+    overlay = tmp_path / "found.png"
+    rc = main(
+        ["inspect", "born_digital", "--page", "0", "--find", "grew 42", "--overlay", str(overlay)]
+    )
+    assert rc == 0
+    assert overlay.exists()
+    out = capsys.readouterr().out
+    assert "1" in out and "match" in out.lower()
+
+
+def test_inspect_find_reports_a_miss(born_digital_pdf, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'i.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "data"))
+    main(["ingest", str(born_digital_pdf), "--dpi", "72"])
+    capsys.readouterr()
+
+    assert main(["inspect", "born_digital", "--page", "0", "--find", "no such phrase"]) == 0
+    assert "not found" in capsys.readouterr().out.lower()
+
+
+def test_inspect_derives_line_boxes(born_digital_pdf, tmp_path, monkeypatch, capsys):
+    """--kind line must collapse the page's words into fewer, wider boxes."""
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'i.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "data"))
+    main(["ingest", str(born_digital_pdf), "--dpi", "72"])
+    capsys.readouterr()
+
+    overlay = tmp_path / "lines.png"
+    assert (
+        main(
+            ["inspect", "born_digital", "--page", "0", "--kind", "line", "--overlay", str(overlay)]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    # The fixture is two lines of seven words total.
+    assert "2 line boxes derived from 7 stored boxes" in out
+    assert overlay.exists()

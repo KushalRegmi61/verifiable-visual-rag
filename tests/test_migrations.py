@@ -12,19 +12,35 @@ from sqlalchemy import create_engine, inspect
 from visual_verify.store.models import Base
 
 EXPECTED_TABLES = {"documents", "pages", "boxes", "jobs"}
-ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
+REPO_ROOT = Path(__file__).parent.parent
+# The packaged ini, the one the installed `vvrag` loads. The migration assets
+# live inside the package so they ship in the wheel; the repo-root alembic.ini
+# is only a shim pointing back here, and is covered by its own test below.
+ALEMBIC_INI = REPO_ROOT / "src" / "visual_verify" / "alembic.ini"
+ROOT_ALEMBIC_INI = REPO_ROOT / "alembic.ini"
 
 
-def _upgrade_to(db_path: Path, monkeypatch) -> None:
+def _upgrade_to(db_path: Path, monkeypatch, ini: Path = ALEMBIC_INI) -> None:
     """Run migrations against a throwaway database.
 
     Uses the Alembic Python API rather than a subprocess so monkeypatch's env
     var actually reaches env.py, which reads VVRAG_DB_URL via Settings.
     """
     monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{db_path}")
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("script_location", str(ALEMBIC_INI.parent / "migrations"))
-    command.upgrade(cfg, "head")
+    command.upgrade(Config(str(ini)), "head")
+
+
+def test_repo_root_ini_runs_the_same_migrations(tmp_path, monkeypatch):
+    """`uv run alembic upgrade head` from the repo root must still work.
+
+    The README documents it, and the shim's script_location is a hand-written
+    relative path that nothing else would catch if it went stale.
+    """
+    db = tmp_path / "from_root_ini.db"
+    _upgrade_to(db, monkeypatch, ini=ROOT_ALEMBIC_INI)
+
+    tables = set(inspect(create_engine(f"sqlite:///{db}")).get_table_names())
+    assert EXPECTED_TABLES <= tables
 
 
 def test_migration_creates_expected_tables(tmp_path, monkeypatch):
@@ -66,6 +82,4 @@ def test_no_model_migration_drift(tmp_path, monkeypatch):
     db = tmp_path / "drift.db"
     _upgrade_to(db, monkeypatch)
 
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.set_main_option("script_location", str(ALEMBIC_INI.parent / "migrations"))
-    command.check(cfg)  # raises if the models and migrations disagree
+    command.check(Config(str(ALEMBIC_INI)))  # raises if models and migrations disagree

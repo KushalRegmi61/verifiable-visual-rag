@@ -53,6 +53,19 @@ def ingest_pdf(
 
     try:
         sink.begin_document(DocumentRecord(sha256=sha, path=str(pdf_path), n_pages=doc.page_count))
+
+        # done_pages skips already-persisted pages whatever DPI they were made
+        # at, so resuming with a different --dpi would silently leave one
+        # document holding pages of two different pixel sizes and still report
+        # it as fully indexed.
+        existing_dpi = sink.page_dpi(sha)
+        if existing_dpi is not None and existing_dpi != dpi:
+            raise ValueError(
+                f"{pdf_path.name} already has pages rendered at {existing_dpi} dpi; "
+                f"refusing to add pages at {dpi} dpi. Re-ingest the document from "
+                f"scratch to change DPI."
+            )
+
         already = sink.done_pages(sha)
         written = skipped = 0
 

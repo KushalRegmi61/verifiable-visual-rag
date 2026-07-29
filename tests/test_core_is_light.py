@@ -8,7 +8,9 @@ only prove the package is uninstalled, not that the core avoids importing it.
 import subprocess
 import sys
 
-FORBIDDEN = ["sqlalchemy", "alembic", "qdrant_client", "fastapi"]
+# torch and transformers are listed before S3 introduces them, so the guard is
+# armed the moment the retriever is tempted to import a model at package import.
+FORBIDDEN = ["sqlalchemy", "alembic", "qdrant_client", "fastapi", "torch", "transformers"]
 
 
 def _modules_after_importing(module: str) -> set[str]:

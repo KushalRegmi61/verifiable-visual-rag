@@ -311,3 +311,23 @@ def test_naive_datetime_is_rejected_and_offsets_are_normalized(tmp_path):
         )
         with pytest.raises(StatementError):
             s.commit()
+
+
+def test_document_recovers_after_a_gate_rejection(session, tmp_path, multipage_pdf):
+    """Rejected then accepted must not leave n_pages stuck at 0."""
+    sink = SqlSink(session)
+    sink.fail_document(
+        "will_pass_later", str(multipage_pdf), RejectReason.NO_TEXT_LAYER, "threshold too high"
+    )
+    session.commit()
+    assert session.get(Document, "will_pass_later").n_pages == 0
+
+    sink.begin_document(
+        DocumentRecord(sha256="will_pass_later", path=str(multipage_pdf), n_pages=3)
+    )
+    sink.finish_document("will_pass_later")
+    session.commit()
+
+    doc = session.get(Document, "will_pass_later")
+    assert doc.n_pages == 3
+    assert doc.status == "indexed"

@@ -28,7 +28,18 @@ class SqlSink:
             self.session.add(
                 Document(sha256=doc.sha256, path=doc.path, n_pages=doc.n_pages, status="pending")
             )
-            self.session.flush()
+        else:
+            # A previous gate rejection may have inserted a placeholder with
+            # n_pages=0. Refresh it, or status would read "3/0 indexed" forever
+            # once the same document is accepted on a later, retuned run.
+            existing.n_pages = doc.n_pages
+            existing.path = doc.path
+            if existing.status == "failed":
+                existing.status = "pending"
+        self.session.flush()
+
+    def page_dpi(self, sha256: str) -> int | None:
+        return self.session.scalar(select(Page.dpi).where(Page.doc_sha == sha256).limit(1))
 
     def done_pages(self, sha256: str) -> set[int]:
         rows = self.session.scalars(select(Page.page_no).where(Page.doc_sha == sha256))

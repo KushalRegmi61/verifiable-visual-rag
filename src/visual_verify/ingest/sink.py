@@ -38,6 +38,15 @@ class Sink(Protocol):
         """Page numbers already persisted, so ingest can resume."""
         ...
 
+    def page_dpi(self, sha256: str) -> int | None:
+        """DPI of the already-persisted pages, or None if there are none.
+
+        Ingest refuses to mix DPIs within a document: S4 maps a patch grid onto
+        page pixels, so heterogeneous page sizes inside one document would make
+        that mapping differ page to page.
+        """
+        ...
+
     def write_page(self, sha256: str, page: PageRecord, boxes: list[BoxRecord]) -> None: ...
 
     def checkpoint(self) -> None:
@@ -72,6 +81,10 @@ class MemorySink:
 
     documents: dict[str, DocumentRecord] = field(default_factory=dict)
     pages: list[PageRecord] = field(default_factory=list)
+    # `pages` is a flat list with no sha on it, so the sha -> dpi answer cannot
+    # be recovered from it. A dedicated dict is cheaper and clearer than making
+    # every page lookup sha-scoped for one query.
+    dpi_by_doc: dict[str, int] = field(default_factory=dict)
     boxes_by_page: dict[tuple[str, int], list[BoxRecord]] = field(default_factory=dict)
     done: set[tuple[str, int]] = field(default_factory=set)
     finished: set[str] = field(default_factory=set)
@@ -83,10 +96,14 @@ class MemorySink:
     def done_pages(self, sha256: str) -> set[int]:
         return {p for s, p in self.done if s == sha256}
 
+    def page_dpi(self, sha256: str) -> int | None:
+        return self.dpi_by_doc.get(sha256)
+
     def write_page(self, sha256: str, page: PageRecord, boxes: list[BoxRecord]) -> None:
         self.pages.append(page)
         self.boxes_by_page[(sha256, page.page_no)] = boxes
         self.done.add((sha256, page.page_no))
+        self.dpi_by_doc.setdefault(sha256, page.dpi)
 
     def checkpoint(self) -> None:
         """No-op: the dict is already as durable as a test double needs to be."""

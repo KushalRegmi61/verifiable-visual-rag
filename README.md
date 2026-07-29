@@ -37,6 +37,27 @@ candidates rather than guessing. (Note that the bare substring `proposal.pdf`
 matches both `proposal_report/proposal.pdf` and `references/reference_proposal.pdf`,
 which is why the example above passes the directory too.)
 
+Two further flags control what gets drawn:
+
+```bash
+# --kind: overlay a coarser granularity, derived from the stored word boxes
+uv run vvrag inspect proposal_report/proposal.pdf --page 3 --kind line --overlay lines.png
+
+# --find: draw only the rects covering a phrase — the project's claim, as a picture
+uv run vvrag inspect proposal_report/proposal.pdf --page 3 \
+    --find "region-level evidence" --overlay found.png
+```
+
+Only word boxes are stored; `line`, `block`, and `--find` spans are computed at
+query time, so the granularity can be retuned without re-ingesting. A phrase
+that wraps across a line break comes back as one rect per line rather than a
+single union, so the highlight never sweeps in the words between the two halves.
+`--find` prints how many rects matched, or says the phrase is not on that page,
+and exits 0 either way.
+
+Render DPI is fixed per document: re-ingesting with a different `--dpi` is
+refused rather than silently mixing page sizes inside one document.
+
 Configuration is environment-driven; nothing is hardcoded:
 
 | Variable | Default | Purpose |
@@ -53,9 +74,14 @@ this project runs no OCR.
 ### Testing
 
 ```bash
-uv run pytest                        # 127 tests
+uv run pytest                        # 135 tests
 uv run ruff check . && uv run ruff format --check .
 ```
+
+One test is marked `slow`: it builds the wheel, installs it into a throwaway
+virtualenv, and runs the `vvrag` console script from there, so that a path that
+only resolves inside a source checkout cannot pass unnoticed. It takes about 25
+seconds and runs by default; `uv run pytest -m "not slow"` skips it.
 
 ## Rebuilding the deck
 

@@ -46,7 +46,8 @@ select = ["E", "F", "I", "UP", "B"]
 # Alembic revision files are generated. Whether `sa` ends up used, and how long
 # a rendered op call is, are not under our control, so hand-editing every new
 # revision to satisfy the linter would be busywork.
-"migrations/versions/*" = ["E501", "F401"]
+"**/migrations/versions/*" = ["E501", "F401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: tests that build and install a wheel"]
