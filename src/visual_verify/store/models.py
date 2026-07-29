@@ -7,8 +7,38 @@ SQLModel's single-class approach would have introduced.
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, TypeDecorator
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class UtcDateTime(TypeDecorator):
+    """A timestamp that is always aware and always UTC, on every backend.
+
+    `DateTime(timezone=True)` alone is not enough on SQLite: the offset is
+    written to the column, but SQLAlchemy's SQLite result processor parses the
+    string with a regex that discards it, so the value comes back naive and
+    raises TypeError the moment it is compared to an aware datetime. Postgres
+    has no such problem, which is exactly what makes the divergence dangerous.
+
+    Binding normalizes to UTC; loading re-attaches UTC when the backend handed
+    back a naive value. The emitted DDL is unchanged, so this is a Python-side
+    coercion only.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("refusing to store a naive datetime; pass an aware one")
+        return value.astimezone(UTC)
+
+    def process_result_value(self, value: datetime | None, dialect) -> datetime | None:
+        if value is None:
+            return None
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class Base(DeclarativeBase):
@@ -23,7 +53,7 @@ class Document(Base):
     n_pages: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC)
+        UtcDateTime, default=lambda: datetime.now(UTC)
     )
 
     pages: Mapped[list["Page"]] = relationship(back_populates="document")
@@ -78,5 +108,5 @@ class Job(Base):
     page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(UTC)
+        UtcDateTime, default=lambda: datetime.now(UTC)
     )

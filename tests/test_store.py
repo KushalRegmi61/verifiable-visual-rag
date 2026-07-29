@@ -181,3 +181,36 @@ def test_document_status_includes_rejected_documents(scanned_pdf, tmp_path, sess
     assert len(rows) == 1
     assert rows[0].status == "failed"
     assert rows[0].pages_done == 0
+
+
+def test_sqlite_enforces_foreign_keys(tmp_path):
+    """A page referencing a missing document must fail on SQLite as it would on Postgres."""
+    from sqlalchemy.exc import IntegrityError
+
+    from visual_verify.store.engine import make_engine
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'fk.db'}")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as s:
+        s.add(Page(doc_sha="nonexistent", page_no=0, image_path="x.png",
+                   width_px=1, height_px=1, dpi=72))
+        with pytest.raises(IntegrityError):
+            s.commit()
+
+
+def test_created_at_round_trips_as_aware(tmp_path):
+    from datetime import UTC, datetime
+
+    from visual_verify.store.engine import make_engine
+
+    engine = make_engine(f"sqlite:///{tmp_path / 'tz.db'}")
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as s:
+        s.add(Document(sha256="a" * 64, path="/x.pdf", n_pages=1, status="pending"))
+        s.commit()
+        got = s.get(Document, "a" * 64)
+        assert got.created_at.tzinfo is not None
+        # Must be comparable to an aware datetime without raising.
+        assert (datetime.now(UTC) - got.created_at).total_seconds() < 60
