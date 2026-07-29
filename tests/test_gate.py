@@ -64,3 +64,27 @@ def test_ratio_threshold_is_configurable(multipage_pdf, tmp_path):
     ok = open_and_check(path, min_text_page_ratio=0.5)
     assert ok.page_count == 6
     ok.close()
+
+
+def test_encryption_is_checked_before_text_layer(tmp_path):
+    """Reason precedence: an encrypted image-only PDF reports ENCRYPTED."""
+    import fitz
+
+    path = tmp_path / "encrypted_scanned.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 200, 200))
+    pix.clear_with(128)
+    page.insert_image(fitz.Rect(50, 50, 250, 250), pixmap=pix)
+    doc.save(path, encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="user")
+    doc.close()
+
+    with pytest.raises(GateError) as exc:
+        open_and_check(path)
+    assert exc.value.reason is RejectReason.ENCRYPTED
+
+
+def test_programming_error_is_not_reported_as_corrupt():
+    """A TypeError from misuse must propagate, not masquerade as a bad file."""
+    with pytest.raises(TypeError):
+        open_and_check(123)

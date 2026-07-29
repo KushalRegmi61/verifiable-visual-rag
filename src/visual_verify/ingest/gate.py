@@ -51,7 +51,7 @@ def open_and_check(path: Path, min_text_page_ratio: float = 0.6) -> fitz.Documen
     """Open a PDF and reject it unless it is ingestable. Caller closes the result."""
     try:
         doc = fitz.open(path)
-    except Exception as exc:
+    except RuntimeError as exc:
         raise GateError(RejectReason.CORRUPT, str(exc)) from exc
 
     if doc.needs_pass:
