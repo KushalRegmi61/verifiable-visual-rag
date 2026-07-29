@@ -28,7 +28,7 @@ import fitz
 
 logger = logging.getLogger(__name__)
 
-BoxKind = Literal["word", "table_cell"]
+BoxKind = Literal["word", "table_cell", "line", "block", "span"]
 
 
 @dataclass(frozen=True)
