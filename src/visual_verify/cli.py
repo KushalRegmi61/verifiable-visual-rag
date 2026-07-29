@@ -114,10 +114,43 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("no documents ingested")
         return 0
 
-    print(f"{'document':<40} {'pages':>10}  status")
-    for r in rows:
-        print(f"{Path(r.path).name:<40} {f'{r.pages_done}/{r.n_pages}':>10}  {r.status}")
+    # Widen the name column to the longest name in this result set rather than
+    # a fixed :<40. Real corpus filenames (ENCT354MINORPROJECT_...pdf is 43
+    # chars) overflowed the fixed width and shifted every later column right.
+    names = [Path(r.path).name for r in rows]
+    width = max(len("document"), *(len(n) for n in names))
+
+    print(f"{'document':<{width}} {'pages':>10}  status")
+    for name, r in zip(names, rows, strict=True):
+        print(f"{name:<{width}} {f'{r.pages_done}/{r.n_pages}':>10}  {r.status}")
     return 0
+
+
+def _resolve_document(session: Session, needle: str) -> Document | None | list[Document]:
+    """Find the one document a user meant.
+
+    Resolution order: exact sha256, then every document whose path contains the
+    needle or whose sha256 starts with it. Returns the document, None when
+    nothing matched, or the candidate list when more than one matched. The old
+    code took `.limit(1)`, so `inspect proposal` silently picked whichever of
+    proposal.pdf / reference_proposal.pdf was inserted first.
+    """
+    exact = session.get(Document, needle)
+    if exact is not None:
+        return exact
+
+    matches = list(
+        session.scalars(
+            select(Document)
+            .where(Document.path.contains(needle) | Document.sha256.startswith(needle))
+            .order_by(Document.path)
+        )
+    )
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return matches
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -128,12 +161,18 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     """
     settings = Settings.from_env()
     with _session(settings) as session:
-        doc = session.scalar(
-            select(Document).where(Document.path.contains(args.doc)).limit(1)
-        ) or session.get(Document, args.doc)
-        if doc is None:
+        found = _resolve_document(session, args.doc)
+        if found is None:
             print(f"no document matching {args.doc!r}")
             return 1
+        if isinstance(found, list):
+            print(f"ambiguous: {args.doc!r} matches {len(found)} documents")
+            width = max(len(Path(d.path).name) for d in found)
+            for d in found:
+                print(f"  {Path(d.path).name:<{width}}  ({d.sha256[:12]})")
+            print("use a longer substring or a sha256 prefix")
+            return 1
+        doc = found
 
         page = session.scalar(
             select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
@@ -179,7 +218,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.set_defaults(func=cmd_status)
 
     p_inspect = sub.add_parser("inspect", help="inspect a page and optionally draw its boxes")
-    p_inspect.add_argument("doc", help="document sha256 or a substring of its path")
+    p_inspect.add_argument(
+        "doc", help="document sha256 (or a prefix of it) or a substring of its path"
+    )
     p_inspect.add_argument("--page", type=int, default=0)
     p_inspect.add_argument("--overlay", help="write a PNG with boxes drawn on the page")
     p_inspect.set_defaults(func=cmd_inspect)
