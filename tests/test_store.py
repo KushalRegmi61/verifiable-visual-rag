@@ -25,8 +25,19 @@ def test_write_page_persists_rows(session):
     sink.write_page(
         "abc123",
         PageRecord(page_no=0, image_path="abc123/p0000.png", width_px=100, height_px=200, dpi=72),
-        [BoxRecord(kind="word", x0=0.1, y0=0.2, x1=0.3, y1=0.25, text="hello",
-                   block_no=0, line_no=0, word_no=0)],
+        [
+            BoxRecord(
+                kind="word",
+                x0=0.1,
+                y0=0.2,
+                x1=0.3,
+                y1=0.25,
+                text="hello",
+                block_no=0,
+                line_no=0,
+                word_no=0,
+            )
+        ],
     )
     session.commit()
 
@@ -147,9 +158,11 @@ def test_boxes_round_trip_with_full_fidelity(born_digital_pdf, tmp_path, session
     doc.close()
 
     page = session.scalar(select(Page))
-    stored = list(session.scalars(
-        select(Box).where(Box.page_id == page.id, Box.kind == "word").order_by(Box.id)
-    ))
+    stored = list(
+        session.scalars(
+            select(Box).where(Box.page_id == page.id, Box.kind == "word").order_by(Box.id)
+        )
+    )
 
     assert len(stored) == len(expected)
     for got, want in zip(stored, expected, strict=True):
@@ -192,8 +205,16 @@ def test_sqlite_enforces_foreign_keys(tmp_path):
     Base.metadata.create_all(engine)
 
     with Session(engine) as s:
-        s.add(Page(doc_sha="nonexistent", page_no=0, image_path="x.png",
-                   width_px=1, height_px=1, dpi=72))
+        s.add(
+            Page(
+                doc_sha="nonexistent",
+                page_no=0,
+                image_path="x.png",
+                width_px=1,
+                height_px=1,
+                dpi=72,
+            )
+        )
         with pytest.raises(IntegrityError):
             s.commit()
 
@@ -270,14 +291,23 @@ def test_naive_datetime_is_rejected_and_offsets_are_normalized(tmp_path):
 
     npt = timezone(timedelta(hours=5, minutes=45))
     with Session(engine) as s:
-        s.add(Document(sha256="b" * 64, path="/x.pdf", n_pages=1,
-                       created_at=datetime(2026, 1, 1, 12, 0, tzinfo=npt)))
+        s.add(
+            Document(
+                sha256="b" * 64,
+                path="/x.pdf",
+                n_pages=1,
+                created_at=datetime(2026, 1, 1, 12, 0, tzinfo=npt),
+            )
+        )
         s.commit()
         got = s.get(Document, "b" * 64)
         assert got.created_at == datetime(2026, 1, 1, 6, 15, tzinfo=UTC)
 
     with Session(engine) as s:
-        s.add(Document(sha256="c" * 64, path="/y.pdf", n_pages=1,
-                       created_at=datetime(2026, 1, 1, 12, 0)))
+        s.add(
+            Document(
+                sha256="c" * 64, path="/y.pdf", n_pages=1, created_at=datetime(2026, 1, 1, 12, 0)
+            )
+        )
         with pytest.raises(StatementError):
             s.commit()

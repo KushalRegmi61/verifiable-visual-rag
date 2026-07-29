@@ -30,7 +30,13 @@ if _url.drivername.startswith("sqlite") and _url.database not in (None, "", ":me
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+#
+# Skipped when a programmatic caller asks for it. `vvrag` brings the schema to
+# head on every invocation, and fileConfig would reinstate alembic.ini's INFO
+# level over whatever the caller configured, printing migration-runtime noise
+# before the output of even a read-only command like `vvrag status`. Running
+# `alembic` directly leaves the attribute unset and still logs normally.
+if config.attributes.get("configure_logger", True) and config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
@@ -48,6 +54,7 @@ def render_item(type_, obj, autogen_context):
     if type_ == "type" and isinstance(obj, UtcDateTime):
         return "sa.DateTime(timezone=True)"
     return False
+
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

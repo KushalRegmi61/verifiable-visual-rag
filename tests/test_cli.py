@@ -71,6 +71,14 @@ def test_inspect_reports_unknown_document(tmp_path, monkeypatch, capsys):
     assert "no document" in capsys.readouterr().out.lower()
 
 
+def test_missing_file_reports_cleanly(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'i.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "data"))
+
+    assert main(["ingest", str(tmp_path / "nope.pdf"), "--dpi", "72"]) == 1
+    assert "no such file" in capsys.readouterr().out
+
+
 def test_engine_enforces_foreign_keys(tmp_path, monkeypatch):
     """The CLI must route through make_engine or the FK guarantee evaporates."""
     from sqlalchemy import text

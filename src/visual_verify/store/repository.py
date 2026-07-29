@@ -26,8 +26,7 @@ class SqlSink:
         existing = self.session.get(Document, doc.sha256)
         if existing is None:
             self.session.add(
-                Document(sha256=doc.sha256, path=doc.path, n_pages=doc.n_pages,
-                         status="pending")
+                Document(sha256=doc.sha256, path=doc.path, n_pages=doc.n_pages, status="pending")
             )
             self.session.flush()
 
@@ -54,7 +53,10 @@ class SqlSink:
                     {
                         "page_id": row.id,
                         "kind": b.kind,
-                        "x0": b.x0, "y0": b.y0, "x1": b.x1, "y1": b.y1,
+                        "x0": b.x0,
+                        "y0": b.y0,
+                        "x1": b.x1,
+                        "y1": b.y1,
                         "text": b.text,
                         "block_no": b.block_no,
                         "line_no": b.line_no,
@@ -64,9 +66,7 @@ class SqlSink:
                 ],
             )
 
-        self.session.add(
-            Job(doc_sha=sha256, stage="page", state="done", page_no=page.page_no)
-        )
+        self.session.add(Job(doc_sha=sha256, stage="page", state="done", page_no=page.page_no))
 
     def checkpoint(self) -> None:
         """Commit. The pipeline calls this per page so a crash cannot undo them."""
@@ -77,9 +77,7 @@ class SqlSink:
         if doc is not None:
             doc.status = "indexed"
 
-    def fail_document(
-        self, sha256: str, path: str, reason: RejectReason, detail: str
-    ) -> None:
+    def fail_document(self, sha256: str, path: str, reason: RejectReason, detail: str) -> None:
         """Record a rejection.
 
         The gate runs before begin_document, so this may be the first time the
@@ -96,9 +94,7 @@ class SqlSink:
         """
         doc = self.session.get(Document, sha256)
         if doc is None:
-            self.session.add(
-                Document(sha256=sha256, path=path, n_pages=0, status="failed")
-            )
+            self.session.add(Document(sha256=sha256, path=path, n_pages=0, status="failed"))
         elif doc.status != "indexed":
             doc.status = "failed"
         self.session.add(
@@ -123,9 +119,7 @@ class DocumentStatus:
 def document_status(session: Session) -> list[DocumentStatus]:
     """One row per document, for `vvrag status`. Includes rejected documents."""
     counts = dict(
-        session.execute(
-            select(Page.doc_sha, func.count(Page.id)).group_by(Page.doc_sha)
-        ).all()
+        session.execute(select(Page.doc_sha, func.count(Page.id)).group_by(Page.doc_sha)).all()
     )
     return [
         DocumentStatus(
@@ -137,7 +131,5 @@ def document_status(session: Session) -> list[DocumentStatus]:
         )
         # sha256 is the tiebreaker: same-second inserts would otherwise order
         # nondeterministically, which makes CLI output diffs noisy for no reason.
-        for d in session.scalars(
-            select(Document).order_by(Document.created_at, Document.sha256)
-        )
+        for d in session.scalars(select(Document).order_by(Document.created_at, Document.sha256))
     ]

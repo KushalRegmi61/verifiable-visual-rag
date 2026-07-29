@@ -6,7 +6,7 @@ fail loudly at ingest rather than silently producing empty pages.
 """
 
 import hashlib
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import fitz
@@ -14,7 +14,7 @@ import fitz
 CHUNK = 1 << 20
 
 
-class RejectReason(str, Enum):
+class RejectReason(StrEnum):
     CORRUPT = "corrupt"
     ENCRYPTED = "encrypted"
     NO_TEXT_LAYER = "no_text_layer"

@@ -31,11 +31,20 @@ def _ensure_schema(settings: Settings) -> None:
     without stamping alembic_version, and the next `alembic upgrade head` would
     fail with "table already exists". Migrations are the single source of truth.
     """
+    import logging
+
     from alembic import command
     from alembic.config import Config
 
+    # _ensure_schema runs on every invocation, including read-only commands like
+    # `vvrag status`. Alembic's INFO logging would then print two lines of
+    # migration-runtime noise before any command's real output. The attribute
+    # stops migrations/env.py from reapplying alembic.ini's INFO level on top.
+    logging.getLogger("alembic").setLevel(logging.WARNING)
+
     ini = Path(__file__).resolve().parent.parent.parent / "alembic.ini"
     cfg = Config(str(ini))
+    cfg.attributes["configure_logger"] = False
     cfg.set_main_option("script_location", str(ini.parent / "migrations"))
     command.upgrade(cfg, "head")
 
@@ -54,9 +63,15 @@ def _session(settings: Settings) -> Session:
 def _ingest_one(path: Path, sink: SqlSink, settings: Settings, dpi: int) -> bool:
     try:
         result = ingest_pdf(
-            path, sink, pages_dir=settings.pages_dir, dpi=dpi,
+            path,
+            sink,
+            pages_dir=settings.pages_dir,
+            dpi=dpi,
             min_text_page_ratio=settings.min_text_page_ratio,
         )
+    except FileNotFoundError:
+        print(f"  {path.name}: no such file ({path})")
+        return False
     except GateError as exc:
         print(f"  {path.name}: rejected ({exc})")
         return False

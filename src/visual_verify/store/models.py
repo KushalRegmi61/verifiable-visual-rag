@@ -57,9 +57,7 @@ class Document(Base):
     path: Mapped[str] = mapped_column(Text)
     n_pages: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="pending")
-    created_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, default=lambda: datetime.now(UTC)
-    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=lambda: datetime.now(UTC))
 
     pages: Mapped[list["Page"]] = relationship(back_populates="document")
 
@@ -116,9 +114,7 @@ class Job(Base):
     state: Mapped[str] = mapped_column(String(16))
     page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, default=lambda: datetime.now(UTC)
-    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=lambda: datetime.now(UTC))
 
     # Jobs are the audit log for documents, so an orphan job row should not be
     # possible; doc_sha is also the only column anyone filters this table on.

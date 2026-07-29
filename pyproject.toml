@@ -29,6 +29,15 @@ packages = ["src/visual_verify"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# presentation/build_deck.py is a standalone slide-generation script for the
+# defence deck, not part of the package or its tests. Its aligned-semicolon
+# layout tables and long verbatim quotes from the proposal are deliberate, and
+# reformatting them to the library's conventions would only obscure them.
+#
+# docs/ holds planning prose. Ruff formats Python fenced in Markdown, which
+# would rewrite code snippets quoted verbatim in those documents; they are a
+# historical record of what was written, not code that runs.
+extend-exclude = ["presentation", "docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

@@ -13,9 +13,7 @@ FORBIDDEN = ["sqlalchemy", "alembic", "qdrant_client", "fastapi"]
 
 def _modules_after_importing(module: str) -> set[str]:
     code = f"import {module}, sys; print('\\n'.join(sys.modules))"
-    out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
-    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     return set(out.stdout.split())
 
 
