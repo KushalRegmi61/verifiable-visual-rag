@@ -9,6 +9,9 @@ from pathlib import Path
 import fitz
 import pytest
 
+# LOAD-BEARING. Later test files assert exact coordinates derived from these
+# values (e.g. TEXT_ORIGIN[0] / PAGE_W). Changing the text, the origin, or the
+# page size will change those expectations. Grep for consumers before editing.
 # US Letter at 72 dpi. Word positions below are chosen against these dimensions.
 PAGE_W, PAGE_H = 612.0, 792.0
 
