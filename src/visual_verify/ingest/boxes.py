@@ -7,16 +7,26 @@ snap-to-box ranks without re-ingesting, and lets S7 union the words covering an
 arbitrary answer substring to build a gold box.
 
 COORDINATE HANDLING, THE THING TO GET RIGHT:
-get_text("words") returns coordinates in UNROTATED page space, while page.rect
-and get_pixmap() both use DISPLAYED space. On a /Rotate 90 page these differ.
-Multiplying by page.rotation_matrix maps text space into displayed space; on an
-unrotated page it is the identity, so it is always safe to apply.
+page.rect and get_pixmap() both use DISPLAYED space, and that is the space every
+stored box is normalized against. The two sources of boxes do NOT agree about
+which space they hand back, and neither raises if you get it wrong:
+
+  - get_text("words") returns UNROTATED text space. On a /Rotate 90 page its
+    coordinates are byte-identical to the unrotated page's. These must be
+    multiplied by page.rotation_matrix (the identity when unrotated).
+  - find_tables() returns DISPLAYED space already. Multiplying these by
+    rotation_matrix rotates them a second time and puts every cell off-page.
+
+Both were verified empirically on PyMuPDF 1.28; see the per-call-site comments.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
 import fitz
+
+logger = logging.getLogger(__name__)
 
 BoxKind = Literal["word", "table_cell"]
 
@@ -35,18 +45,36 @@ class BoxRecord:
     line_no: int = -1
     word_no: int = -1
 
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        """The box as a plain tuple, matching contracts.BBox."""
+        return (self.x0, self.y0, self.x1, self.y1)
+
+
+def word_boxes(boxes: list[BoxRecord]) -> list[BoxRecord]:
+    """Only the word boxes.
+
+    Table cells carry block_no/line_no/word_no of -1. Grouping a mixed list by
+    those fields would collapse every cell on the page into one fabricated
+    "line". Any consumer that groups by hierarchy must filter through here first.
+    """
+    return [b for b in boxes if b.kind == "word"]
+
 
 def _normalize(rect: fitz.Rect, page: fitz.Page) -> tuple[float, float, float, float] | None:
-    """Map a text-space rect into displayed space and normalize to 0-1.
+    """Normalize an already-DISPLAYED-space rect to 0-1 against page.rect.
+
+    Callers are responsible for getting their rect into displayed space first;
+    the two sources disagree about this and each call site says which it is.
 
     Returns None for degenerate boxes, which are dropped rather than stored.
     """
-    r = rect * page.rotation_matrix
+    r = fitz.Rect(rect)
     r.normalize()  # rotation can invert x0/x1 or y0/y1
 
     w, h = page.rect.width, page.rect.height
     if w <= 0 or h <= 0:
-        return None
+        raise ValueError(f"page {page.number} has non-positive rect {page.rect}")
 
     x0 = min(max(r.x0 / w, 0.0), 1.0)
     y0 = min(max(r.y0 / h, 0.0), 1.0)
@@ -63,16 +91,19 @@ def _word_boxes(page: fitz.Page) -> list[BoxRecord]:
     for x0, y0, x1, y1, word, block_no, line_no, word_no in page.get_text("words"):
         if not word.strip():
             continue
-        norm = _normalize(fitz.Rect(x0, y0, x1, y1), page)
+        # Words come back in UNROTATED text space, so map them into displayed
+        # space. On an unrotated page rotation_matrix is the identity.
+        norm = _normalize(fitz.Rect(x0, y0, x1, y1) * page.rotation_matrix, page)
         if norm is None:
             continue
+        nx0, ny0, nx1, ny1 = norm
         out.append(
             BoxRecord(
                 kind="word",
-                x0=norm[0],
-                y0=norm[1],
-                x1=norm[2],
-                y1=norm[3],
+                x0=nx0,
+                y0=ny0,
+                x1=nx1,
+                y1=ny1,
                 text=word,
                 block_no=block_no,
                 line_no=line_no,
@@ -88,29 +119,30 @@ def _table_cell_boxes(page: fitz.Page) -> list[BoxRecord]:
     find_tables is best-effort: a page with no ruled table yields nothing, and a
     malformed table must not abort the whole ingest.
     """
+    out: list[BoxRecord] = []
     try:
         finder = page.find_tables()
+        for table in finder.tables:
+            for cell in table.cells:
+                if cell is None:
+                    continue
+                # VERIFIED ON PyMuPDF 1.28: unlike get_text("words"),
+                # find_tables already returns DISPLAYED-space coordinates. On a
+                # /Rotate 90 page a cell comes back as (602, 72, 632, 192) while
+                # the same page's words are still unrotated. Applying
+                # rotation_matrix here would rotate them a second time.
+                norm = _normalize(fitz.Rect(cell), page)
+                if norm is None:
+                    continue
+                x0, y0, x1, y1 = norm
+                out.append(BoxRecord(kind="table_cell", x0=x0, y0=y0, x1=x1, y1=y1, text=""))
     except Exception:
+        # Broad on purpose: PyMuPDF's table API is undocumented enough that
+        # narrowing would be guesswork. But log loudly — silently yielding zero
+        # cells on every page would surface much later as degraded retrieval and
+        # be misattributed to the model.
+        logger.warning("find_tables failed on page %s", page.number, exc_info=True)
         return []
-
-    out: list[BoxRecord] = []
-    for table in finder.tables:
-        for cell in table.cells:
-            if cell is None:
-                continue
-            norm = _normalize(fitz.Rect(cell), page)
-            if norm is None:
-                continue
-            out.append(
-                BoxRecord(
-                    kind="table_cell",
-                    x0=norm[0],
-                    y0=norm[1],
-                    x1=norm[2],
-                    y1=norm[3],
-                    text="",
-                )
-            )
     return out
 
 

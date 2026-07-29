@@ -2,11 +2,7 @@ import fitz
 import pytest
 
 from conftest import PAGE_W, TEXT_ORIGIN
-from visual_verify.ingest.boxes import BoxRecord, extract_boxes
-
-
-def _words(boxes: list[BoxRecord]) -> list[BoxRecord]:
-    return [b for b in boxes if b.kind == "word"]
+from visual_verify.ingest.boxes import extract_boxes, word_boxes
 
 
 def test_extracts_every_word(born_digital_pdf):
@@ -14,7 +10,7 @@ def test_extracts_every_word(born_digital_pdf):
     boxes = extract_boxes(doc[0])
     doc.close()
 
-    texts = [b.text for b in _words(boxes)]
+    texts = [b.text for b in word_boxes(boxes)]
     assert texts == ["Revenue", "grew", "42", "percent", "Margins", "held", "steady"]
 
 
@@ -40,7 +36,7 @@ def test_first_word_lands_at_known_position(born_digital_pdf):
     boxes = extract_boxes(doc[0])
     doc.close()
 
-    first = _words(boxes)[0]
+    first = word_boxes(boxes)[0]
     assert first.text == "Revenue"
     assert first.x0 == pytest.approx(TEXT_ORIGIN[0] / PAGE_W)
 
@@ -50,15 +46,12 @@ def test_parent_hierarchy_is_recorded(born_digital_pdf):
     boxes = extract_boxes(doc[0])
     doc.close()
 
-    words = _words(boxes)
+    words = word_boxes(boxes)
     assert words[0].word_no == 0
     assert words[1].word_no == 1
-    # The two inserted lines must not share a line_no.
-    assert {w.line_no for w in words if w.text == "Revenue"} != {
-        w.line_no for w in words if w.text == "Margins"
-    } or {w.block_no for w in words if w.text == "Revenue"} != {
-        w.block_no for w in words if w.text == "Margins"
-    }
+    # Downstream grouping keys on the (block, line) PAIR. PyMuPDF puts each
+    # insert_text call in its own block, so line_no alone is not distinguishing.
+    assert len({(w.block_no, w.line_no) for w in words}) == 2
 
 
 def test_rotated_page_boxes_match_rendered_space(rotated_pdf, born_digital_pdf):
@@ -69,11 +62,11 @@ def test_rotated_page_boxes_match_rendered_space(rotated_pdf, born_digital_pdf):
     degree rotation that word belongs near the right edge.
     """
     rot = fitz.open(rotated_pdf)
-    rot_boxes = _words(extract_boxes(rot[0]))
+    rot_boxes = word_boxes(extract_boxes(rot[0]))
     rot.close()
 
     flat = fitz.open(born_digital_pdf)
-    flat_boxes = _words(extract_boxes(flat[0]))
+    flat_boxes = word_boxes(extract_boxes(flat[0]))
     flat.close()
 
     rot_first = rot_boxes[0]
@@ -97,13 +90,13 @@ def test_drops_whitespace_only_words(tmp_path):
     boxes = extract_boxes(page)
     doc.close()
 
-    assert [b.text for b in _words(boxes)] == ["alpha", "beta"]
+    assert [b.text for b in word_boxes(boxes)] == ["alpha", "beta"]
 
 
 def test_drops_degenerate_and_clamps_out_of_bounds(tmp_path):
     """Zero-area boxes are dropped; boxes outside the rect are clamped to 0-1.
 
-    Text placed at a negative y and past the right edge exercises both paths.
+    Text placed past the right edge exercises both paths.
     """
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
@@ -112,7 +105,7 @@ def test_drops_degenerate_and_clamps_out_of_bounds(tmp_path):
     boxes = extract_boxes(page)
     doc.close()
 
-    words = _words(boxes)
+    words = word_boxes(boxes)
     assert "inside" in [b.text for b in words]
     for b in words:
         assert 0.0 <= b.x0 < b.x1 <= 1.0
@@ -124,7 +117,7 @@ def test_handles_page_with_no_text(scanned_pdf):
     boxes = extract_boxes(doc[0])
     doc.close()
 
-    assert _words(boxes) == []
+    assert word_boxes(boxes) == []
 
 
 def test_extracts_table_cells(tmp_path):
@@ -146,6 +139,72 @@ def test_extracts_table_cells(tmp_path):
     doc.close()
 
     cells = [b for b in boxes if b.kind == "table_cell"]
+    assert len(cells) == 9
+    for c in cells:
+        assert 0.0 <= c.x0 < c.x1 <= 1.0
+        assert 0.0 <= c.y0 < c.y1 <= 1.0
+    # The grid spans x 72..432pt and y 100..190pt on a 612x792 page.
+    assert min(c.x0 for c in cells) == pytest.approx(72 / 612, abs=0.01)
+    assert max(c.x1 for c in cells) == pytest.approx(432 / 612, abs=0.01)
+    assert min(c.y0 for c in cells) == pytest.approx(100 / 792, abs=0.01)
+    assert max(c.y1 for c in cells) == pytest.approx(190 / 792, abs=0.01)
+
+
+def test_table_detection_failure_degrades_to_words(born_digital_pdf, monkeypatch):
+    """A find_tables explosion must not lose the word boxes."""
+
+    def boom(self, *a, **kw):
+        raise RuntimeError("simulated pymupdf failure")
+
+    monkeypatch.setattr(fitz.Page, "find_tables", boom)
+
+    doc = fitz.open(born_digital_pdf)
+    boxes = extract_boxes(doc[0])
+    doc.close()
+
+    assert [b.text for b in word_boxes(boxes)][0] == "Revenue"
+    assert [b for b in boxes if b.kind == "table_cell"] == []
+
+
+def test_table_cells_are_rotation_corrected(tmp_path):
+    """Cells reach _normalize by a different path than words, so cover them too."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    for r in range(3):
+        for c in range(3):
+            x, y = 72 + c * 120, 100 + r * 30
+            page.draw_rect(fitz.Rect(x, y, x + 120, y + 30), color=(0, 0, 0), width=1)
+            page.insert_text((x + 5, y + 20), f"r{r}c{c}", fontsize=9)
+    doc[0].set_rotation(90)
+    path = tmp_path / "rotated_table.pdf"
+    doc.save(path)
+    doc.close()
+
+    doc = fitz.open(path)
+    cells = [b for b in extract_boxes(doc[0]) if b.kind == "table_cell"]
+    doc.close()
+
     assert len(cells) > 0
     for c in cells:
-        assert 0.0 <= c.x0 <= 1.0 and 0.0 <= c.y1 <= 1.0
+        assert 0.0 <= c.x0 < c.x1 <= 1.0
+        assert 0.0 <= c.y0 < c.y1 <= 1.0
+    # Rotated 90, the grid that spanned x 72..432 now spans y 72..432 of a 612-tall page.
+    assert min(c.y0 for c in cells) == pytest.approx(72 / 612, abs=0.02)
+
+
+def test_words_come_before_table_cells(tmp_path):
+    """extract_boxes documents this ordering; pin it."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.draw_rect(fitz.Rect(72, 100, 300, 160), color=(0, 0, 0), width=1)
+    page.insert_text((80, 130), "cellword", fontsize=10)
+    path = tmp_path / "ordering.pdf"
+    doc.save(path)
+    doc.close()
+
+    doc = fitz.open(path)
+    kinds = [b.kind for b in extract_boxes(doc[0])]
+    doc.close()
+
+    if "table_cell" in kinds:
+        assert kinds.index("word") < kinds.index("table_cell")
