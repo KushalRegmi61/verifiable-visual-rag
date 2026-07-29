@@ -1,18 +1,19 @@
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError, RejectReason
 from visual_verify.ingest.pipeline import ingest_pdf
 from visual_verify.ingest.sink import DocumentRecord, PageRecord
+from visual_verify.store.engine import make_engine
 from visual_verify.store.models import Base, Box, Document, Job, Page
 from visual_verify.store.repository import SqlSink, document_status
 
 
 @pytest.fixture
 def session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    engine = make_engine(f"sqlite:///{tmp_path / 'test.db'}")
     Base.metadata.create_all(engine)
     with Session(engine) as s:
         yield s
@@ -187,8 +188,6 @@ def test_sqlite_enforces_foreign_keys(tmp_path):
     """A page referencing a missing document must fail on SQLite as it would on Postgres."""
     from sqlalchemy.exc import IntegrityError
 
-    from visual_verify.store.engine import make_engine
-
     engine = make_engine(f"sqlite:///{tmp_path / 'fk.db'}")
     Base.metadata.create_all(engine)
 
@@ -201,8 +200,6 @@ def test_sqlite_enforces_foreign_keys(tmp_path):
 
 def test_created_at_round_trips_as_aware(tmp_path):
     from datetime import UTC, datetime
-
-    from visual_verify.store.engine import make_engine
 
     engine = make_engine(f"sqlite:///{tmp_path / 'tz.db'}")
     Base.metadata.create_all(engine)
