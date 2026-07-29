@@ -15,7 +15,12 @@ config = context.config
 # The connection string comes from the environment, never from this repo. Keeps
 # migrations under the same "no module hardcodes a connection" rule as the app.
 _url = make_url(Settings.from_env().db_url)
-config.set_main_option("sqlalchemy.url", _url.render_as_string(hide_password=False))
+# set_main_option feeds ConfigParser, which reads "%" as interpolation syntax.
+# Managed-Postgres passwords routinely contain percent-encoded characters, so a
+# raw "%" must be doubled or the URL silently mangles.
+config.set_main_option(
+    "sqlalchemy.url", _url.render_as_string(hide_password=False).replace("%", "%%")
+)
 
 # On a fresh clone `data/` does not exist yet, and SQLite will not create a
 # missing parent directory: it fails with a bare "unable to open database file".
