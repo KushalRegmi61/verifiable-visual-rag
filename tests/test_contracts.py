@@ -37,3 +37,39 @@ def test_claim_and_answer_nest():
 def test_retrieved_page_defaults_text_layer_to_none():
     p = RetrievedPage(doc_id="abc", page=2, image_ref="data/pages/abc/p0002.png", score=0.5)
     assert p.text_layer is None
+
+
+def test_grounded_region_rejects_negative_page():
+    with pytest.raises(ValidationError):
+        GroundedRegion(page=-1, bbox=(0.1, 0.2, 0.3, 0.25), score=0.9, modality="text")
+
+
+def test_grounded_region_rejects_zero_area_bbox():
+    with pytest.raises(ValidationError):
+        GroundedRegion(page=0, bbox=(0.5, 0.5, 0.5, 0.5), score=0.9, modality="text")
+
+
+def test_grounded_region_accepts_full_page_bbox():
+    r = GroundedRegion(page=0, bbox=(0.0, 0.0, 1.0, 1.0), score=0.9, modality="visual")
+    assert r.bbox == (0.0, 0.0, 1.0, 1.0)
+
+
+def test_claim_rejects_confidence_outside_unit_interval():
+    with pytest.raises(ValidationError):
+        Claim(text="x", regions=[], confidence=1.5)
+    with pytest.raises(ValidationError):
+        Claim(text="x", regions=[], confidence=-0.1)
+
+
+def test_score_may_exceed_one():
+    """MaxSim scores are sums over query tokens, not probabilities."""
+    r = GroundedRegion(page=0, bbox=(0.1, 0.1, 0.2, 0.2), score=17.4, modality="visual")
+    assert r.score == 17.4
+
+
+def test_collections_default_to_empty():
+    c = Claim(text="x", confidence=0.5)
+    a = Answer(question="q?")
+    assert c.regions == []
+    assert a.claims == []
+    assert a.abstained_overall is False

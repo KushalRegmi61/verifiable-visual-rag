@@ -20,6 +20,8 @@ class GroundedRegion(BaseModel):
 
     page: int = Field(ge=0)
     bbox: BBox
+    # Retrieval/grounding score. Deliberately unbounded: MaxSim sums a per-token
+    # maximum across query tokens, so it is not a probability and can exceed 1.
     score: float
     modality: Literal["visual", "text"]
     crop_ref: str | None = None
@@ -41,7 +43,7 @@ class Claim(BaseModel):
 
     text: str
     regions: list[GroundedRegion] = Field(default_factory=list)
-    confidence: float
+    confidence: float = Field(ge=0.0, le=1.0)
     abstained: bool = False
 
 
@@ -60,4 +62,6 @@ class RetrievedPage(BaseModel):
     page: int = Field(ge=0)
     image_ref: str
     text_layer: str | None = None
+    # Retrieval score; deliberately unbounded (not a probability). See
+    # GroundedRegion.score.
     score: float
