@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code local guidance (not part of the deliverable)
+CLAUDE.md
+
+# project data
+data/
+*.db
