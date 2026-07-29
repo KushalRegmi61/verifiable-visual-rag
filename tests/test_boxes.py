@@ -184,7 +184,9 @@ def test_table_cells_are_rotation_corrected(tmp_path):
     cells = [b for b in extract_boxes(doc[0]) if b.kind == "table_cell"]
     doc.close()
 
-    assert len(cells) > 0
+    # Exactly 9, not just "some": reintroducing the double-rotation bug drops
+    # the count to 6 at this rotation, so the count is itself a regression signal.
+    assert len(cells) == 9
     for c in cells:
         assert 0.0 <= c.x0 < c.x1 <= 1.0
         assert 0.0 <= c.y0 < c.y1 <= 1.0
@@ -193,11 +195,19 @@ def test_table_cells_are_rotation_corrected(tmp_path):
 
 
 def test_words_come_before_table_cells(tmp_path):
-    """extract_boxes documents this ordering; pin it."""
+    """extract_boxes documents this ordering; pin it unconditionally.
+
+    A lone draw_rect is NOT enough: find_tables reports no table for it, the
+    box list is all words, and any guarded assertion silently never runs. The
+    3x3 grid is the smallest fixture that actually yields both kinds.
+    """
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
-    page.draw_rect(fitz.Rect(72, 100, 300, 160), color=(0, 0, 0), width=1)
-    page.insert_text((80, 130), "cellword", fontsize=10)
+    for r in range(3):
+        for c in range(3):
+            x, y = 72 + c * 120, 100 + r * 30
+            page.draw_rect(fitz.Rect(x, y, x + 120, y + 30), color=(0, 0, 0), width=1)
+            page.insert_text((x + 5, y + 20), f"r{r}c{c}", fontsize=9)
     path = tmp_path / "ordering.pdf"
     doc.save(path)
     doc.close()
@@ -206,5 +216,14 @@ def test_words_come_before_table_cells(tmp_path):
     kinds = [b.kind for b in extract_boxes(doc[0])]
     doc.close()
 
-    if "table_cell" in kinds:
-        assert kinds.index("word") < kinds.index("table_cell")
+    assert "word" in kinds and "table_cell" in kinds
+    assert kinds.index("table_cell") > max(i for i, k in enumerate(kinds) if k == "word")
+
+
+def test_bbox_property_matches_fields(born_digital_pdf):
+    doc = fitz.open(born_digital_pdf)
+    first = word_boxes(extract_boxes(doc[0]))[0]
+    doc.close()
+
+    assert first.bbox == (first.x0, first.y0, first.x1, first.y1)
+    assert len(first.bbox) == 4
