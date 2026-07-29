@@ -163,7 +163,9 @@ Coarser granularities are **derived by grouping at query time, not stored**:
 
 - line box = union of words sharing `(block_no, line_no)`
 - block box = union of words sharing `block_no`
-- span box = union of the words covering a given answer substring
+- span rects = the words covering a given answer substring, **split at line boundaries into one rect per line**
+
+**Revised during implementation:** the span path originally returned a single union rect. Measurement showed that a match wrapping across a line break then produced a rect 5.7x the true ink area, enclosing every word on a two-line fixture page when the answer was two of them (IoU ceiling 0.176). Because this same function generates the evaluation harness's gold boxes, that is fabricated ground truth rather than mere imprecision. It now returns `list[BoxRecord]`, one rect per line the match spans. Matching still runs over the flat reading-order token sequence, so wrapped answers are still found; only the returned geometry is split.
 
 This matters downstream in three ways. Snap-to-box in S4 can be retuned to rank a different
 candidate set (words, lines, or merged spans) without re-ingesting the corpus. The text-span
