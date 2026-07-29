@@ -26,3 +26,18 @@ def test_pages_dir_is_under_data_dir(monkeypatch):
     monkeypatch.setenv("VVRAG_DATA_DIR", "/tmp/vv")
     s = Settings.from_env()
     assert s.pages_dir == Path("/tmp/vv/pages")
+
+
+def test_env_overrides_qdrant_url(monkeypatch):
+    monkeypatch.setenv("VVRAG_QDRANT_URL", "https://xyz.qdrant.cloud")
+    assert Settings.from_env().qdrant_url == "https://xyz.qdrant.cloud"
+
+
+def test_qdrant_url_defaults_to_none(monkeypatch):
+    monkeypatch.delenv("VVRAG_QDRANT_URL", raising=False)
+    assert Settings.from_env().qdrant_url is None
+
+
+def test_env_overrides_min_text_page_ratio(monkeypatch):
+    monkeypatch.setenv("VVRAG_MIN_TEXT_PAGE_RATIO", "0.8")
+    assert Settings.from_env().min_text_page_ratio == 0.8
