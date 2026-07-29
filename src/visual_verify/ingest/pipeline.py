@@ -36,18 +36,20 @@ def ingest_pdf(
     callers leave it None.
     """
     pdf_path = Path(pdf_path)
-    sha = fingerprint(pdf_path) if pdf_path.exists() else ""
+    # A missing file is a caller bug, not a document-level rejection. Recording
+    # it as one would key every missing file in a corpus on the same empty hash.
+    if not pdf_path.is_file():
+        raise FileNotFoundError(pdf_path)
+    sha = fingerprint(pdf_path)
 
     try:
         doc = open_and_check(pdf_path, min_text_page_ratio=min_text_page_ratio)
     except GateError as exc:
-        sink.fail_document(sha, exc.reason, exc.detail)
+        sink.fail_document(sha, str(pdf_path), exc.reason, exc.detail)
         raise
 
     try:
-        sink.begin_document(
-            DocumentRecord(sha256=sha, path=str(pdf_path), n_pages=doc.page_count)
-        )
+        sink.begin_document(DocumentRecord(sha256=sha, path=str(pdf_path), n_pages=doc.page_count))
         already = sink.done_pages(sha)
         written = skipped = 0
 
@@ -58,7 +60,10 @@ def ingest_pdf(
             if max_pages is not None and written >= max_pages:
                 break
 
-            rel = f"{sha[:12]}/p{page_no:04d}.png"
+            # Full hash, not a prefix: a 48-bit prefix collision would interleave
+            # two documents' PNGs under one directory with identical filenames,
+            # overwriting rather than erroring.
+            rel = f"{sha}/p{page_no:04d}.png"
             rendered = render_page(page, pages_dir / rel, dpi=dpi)
             boxes = extract_boxes(page)
 

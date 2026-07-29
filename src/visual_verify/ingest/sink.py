@@ -42,33 +42,45 @@ class Sink(Protocol):
 
     def finish_document(self, sha256: str) -> None: ...
 
-    def fail_document(self, sha256: str, reason: RejectReason, detail: str) -> None: ...
+    def fail_document(self, sha256: str, path: str, reason: RejectReason, detail: str) -> None:
+        """Record a gated-out document.
+
+        The gate runs before begin_document, so the sink has never seen this
+        document's path. It is passed explicitly rather than scraped back out of
+        the detail string.
+        """
+        ...
 
 
 @dataclass
 class MemorySink:
-    """In-memory Sink for tests."""
+    """In-memory Sink for tests.
 
-    document: DocumentRecord | None = None
+    Multi-document on purpose: it is the reference implementation the real
+    store is written against, and a page is identified by (sha256, page_no),
+    never by page_no alone.
+    """
+
+    documents: dict[str, DocumentRecord] = field(default_factory=dict)
     pages: list[PageRecord] = field(default_factory=list)
-    boxes_by_page: dict[int, list[BoxRecord]] = field(default_factory=dict)
+    boxes_by_page: dict[tuple[str, int], list[BoxRecord]] = field(default_factory=dict)
     done: set[tuple[str, int]] = field(default_factory=set)
-    finished: bool = False
-    failure: tuple[str, RejectReason, str] | None = None
+    finished: set[str] = field(default_factory=set)
+    failures: list[tuple[str, str, RejectReason, str]] = field(default_factory=list)
 
     def begin_document(self, doc: DocumentRecord) -> None:
-        self.document = doc
+        self.documents[doc.sha256] = doc
 
     def done_pages(self, sha256: str) -> set[int]:
         return {p for s, p in self.done if s == sha256}
 
     def write_page(self, sha256: str, page: PageRecord, boxes: list[BoxRecord]) -> None:
         self.pages.append(page)
-        self.boxes_by_page[page.page_no] = boxes
+        self.boxes_by_page[(sha256, page.page_no)] = boxes
         self.done.add((sha256, page.page_no))
 
     def finish_document(self, sha256: str) -> None:
-        self.finished = True
+        self.finished.add(sha256)
 
-    def fail_document(self, sha256: str, reason: RejectReason, detail: str) -> None:
-        self.failure = (sha256, reason, detail)
+    def fail_document(self, sha256: str, path: str, reason: RejectReason, detail: str) -> None:
+        self.failures.append((sha256, path, reason, detail))
