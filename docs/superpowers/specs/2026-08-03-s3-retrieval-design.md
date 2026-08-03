@@ -35,7 +35,41 @@ most decisions below.
 | colqwen2-4bit (blanket) | 0.00 | 0.15 | 1.92 GB | 25.0 | 747 | 187 |
 
 Query-side, for the chosen variant: **197 ms** to embed a query (21 query
-tokens), and **1.0 ms per page** for CPU MaxSim.
+tokens), and **1.0 ms per page** for CPU MaxSim in numpy. Note that the CPU
+MaxSim figure is a local measurement, not Qdrant server-side latency; any
+statement about full-corpus scan time derived from it is an extrapolation and is
+labelled as such below.
+
+### 2.1 Patch grid geometry
+
+The 747 vectors per page are **not an opaque count**:
+
+```
+747  =  23 x 32 grid  (736 image patches)  +  11 special tokens
+```
+
+Measured via `ColQwen2Processor.get_n_patches(image_size, spatial_merge_size=2)`
+on the project's own A4 pages rendered at 150 dpi (1241 x 1754 px).
+
+Two properties matter and both are load-bearing:
+
+**The grid is not square, and it is dynamic.** It is derived by `smart_resize`
+from the page's aspect ratio, so a landscape slide produces different dimensions
+than an A4 portrait page. SlideVQA is landscape and this project's own documents
+are portrait, so a single corpus will contain multiple grid shapes. There is no
+global constant to hardcode.
+
+**11 of the 747 vectors are not image patches.** They are special tokens
+(instruction prefix and similar). They participate in MaxSim scoring correctly,
+but they correspond to no region of the page.
+
+Consequently `(n_patches_x, n_patches_y)` and the count of special tokens must
+be **stored per page at embed time** (see 6.2). They cannot be recovered later
+without re-running the model at 21.4 s/page, and S4's snap-to-box is impossible
+without them: mapping a patch index to a page region requires the grid, and
+mapping a *special token* to a page region would fabricate a box with no causal
+relationship to the evidence. That is the same failure class as the `span_box`
+over-union corrected in S2.
 
 Read the last row as a broken configuration, not a model result. See 4.1.
 
@@ -220,7 +254,49 @@ point_id = uuid.uuid5(POINT_NS, f"{doc_sha}:{page_no}")
 ```
 
 Deterministic, so re-embedding a page overwrites its point instead of
-duplicating it. Payload carries `doc_sha`, `page_no`, and `image_path`.
+duplicating it.
+
+### 6.2.1 Payload
+
+The payload is not incidental metadata. Two groups of fields are required for
+correctness, and omitting either forces a full 21.4 s/page re-embed to recover.
+
+```python
+{
+  # identity
+  "doc_sha": str, "page_no": int, "image_path": str,
+
+  # GEOMETRY - required by S4 snap-to-box, unrecoverable without re-embedding
+  "n_patches_x": int,        # 23 for this project's A4 pages
+  "n_patches_y": int,        # 32
+  "n_image_patches": int,    # 736 = x * y
+  "n_special_tokens": int,   # 11; these map to NO page region
+
+  # PROVENANCE - required to detect index/query embedder drift
+  "model_id": str,           # "vidore/colqwen2-v1.0"
+  "model_revision": str,     # resolved commit hash, not a branch name
+  "quantization": str,       # "nf4-skipvis" | "none"
+  "dtype": str,              # "float16"
+  "render_dpi": int,         # the DPI the page PNG was rendered at
+  "embed_version": int,      # bumped on any change to the embedding path
+}
+```
+
+**Geometry.** See 2.1. The grid is dynamic per page, so it cannot be a constant
+in code.
+
+**Provenance.** Section 3 deliberately retains colSmol-500M as a swappable
+fallback and 6.5 permits differing DPI across documents. Vectors from different
+models, quantizations, or render DPIs are not comparable, but nothing about a
+stored vector reveals which produced it. Mixing them yields silently wrong
+rankings with no error. This is the single most commonly reported production
+failure for retrieval systems: the indexing embedder changes, the query embedder
+does not, and recall degrades unnoticed.
+
+Therefore `search()` records the same provenance for its query embedder and
+**refuses to run** when it does not match what the collection holds, rather than
+returning plausible wrong results. `vvrag embed` refuses to add a page whose
+provenance differs from the collection's existing points.
 
 ### 6.3 Qdrant is the single source of truth for embedding state
 
@@ -266,41 +342,74 @@ precomputation, and no caching layer.
 
 ## 8. Qdrant collection
 
+Three **named** vectors in one collection, following the established production
+pattern for ColPali-family retrieval:
+
 ```
 collection: pages
-  size        : 128
-  distance    : Cosine
-  multivector : comparator = MAX_SIM
-  hnsw_config : m = 0          (brute force, exact)
+  named vector "original"            128-dim, Cosine, MAX_SIM, hnsw m=0
+  named vector "mean_pooling_rows"   128-dim, Cosine, MAX_SIM, hnsw m=0
+  named vector "mean_pooling_cols"   128-dim, Cosine, MAX_SIM, hnsw m=0
 ```
 
-Verified server-side against the live cluster, not assumed from the create call.
+`m=0` disables HNSW graph construction. This is necessary rather than merely
+acceptable: building an HNSW graph over multivectors is combinatorially
+expensive, on the order of tens of millions of vector comparisons per page
+insertion at 20k-page scale, because every candidate comparison is itself a full
+MaxSim. Brute force is the correct choice here, and S7's evaluation needs exact
+scores rather than approximate ones in any case.
 
-`m=0` disables HNSW graph construction. This is deliberate: the corpus is small,
-1 ms/page means exhaustive scoring is fast enough, and the evaluation in S7 needs
-exact scores rather than approximate ones. It matches the proposal's description.
+### 8.1 Why three vectors now, when only one is used in S3
 
-### 8.1 Pooled-prefetch rerank is deferred to S7
+**S3 writes all three but queries only `original`.** The pooled vectors are
+computed at embed time and stored unused until S7.
 
-The proposal describes PLAID's compression and pruning stages mapped onto
-Qdrant's pooled prefetch. S3 does not implement it, because at 1 ms/page a
-300-page brute-force scan is about 0.3 s and the optimization would buy nothing
-measurable.
+This is deliberate. Qdrant cannot add a named vector to an existing collection
+without recreating it, so the schema is a one-way door. The pooled
+representations are derived from `original` by averaging along each grid axis,
+which requires the grid geometry from 2.1. Provisioning them now costs one
+cheap arithmetic step per page against a 21.4 s embed, and avoids any
+possibility of a later re-embed.
 
-Deferring it is the stronger position for the report: in S7 it becomes an
-experiment with a measured before and after, rather than an unmeasured
-optimization asserted to help.
+`mean_pooling_rows` and `mean_pooling_cols` reduce roughly 736 image patch
+vectors to about 23 and 32 respectively, plus retained special tokens. Published
+results for this pooling scheme report **NDCG@20 of 0.952 and about 13x faster
+retrieval** versus full-resolution scoring. Max pooling was measured at NDCG@20
+0.759 and is not viable, so mean pooling is specified explicitly rather than left
+as an implementation choice.
 
-### 8.2 Capacity
+### 8.2 Pooled-prefetch rerank as a query strategy is still deferred to S7
 
-187 KB/page against Qdrant Cloud's free 1 GB is roughly **5,600 pages**.
-Quantization is therefore unnecessary and is not implemented.
+S3 stores the pooled vectors but does not use them at query time. The two-stage
+prefetch-then-rerank query path lands in S7 as a measured experiment.
 
-An earlier estimate in the S1/S2 spec put this at about 300 pages. That was
+The reason is corpus size, not doubt about the technique. Extrapolating the
+measured 1 ms/page CPU MaxSim, a 300-page exhaustive scan is on the order of
+0.3 s, so a 13x speedup on a sub-second operation is not worth spending slice
+budget on before there is something to measure it against. Treating it as an
+S7 experiment with a real before and after is a stronger claim for the report
+than an unmeasured optimization asserted to help.
+
+What section 8.1 buys is that this remains a *query-path* change in S7, not a
+re-index.
+
+### 8.3 Capacity and why quantization is not used
+
+187 KB/page against Qdrant Cloud's free 1 GB is roughly **5,600 pages** for the
+`original` vectors, plus about 8 percent for the pooled ones. Quantization is
+therefore unnecessary for storage and is not implemented.
+
+Worth recording explicitly, because it is a common misconception: binary or
+scalar quantization reduces memory but **does not reduce the number of vector
+comparisons**, so it does not address multivector scaling. Pooling reduces
+comparisons; quantization reduces bytes. They solve different problems, and only
+the second one is a constraint this project has.
+
+An earlier estimate in the S1/S2 spec put capacity at about 300 pages. That was
 pessimistic by roughly 18x because it assumed ColQwen2's full patch budget rather
-than the 747 vectors actually produced at the project's render DPI.
+than the 747 vectors actually produced at this project's render DPI.
 
-### 8.3 Configuration
+### 8.4 Configuration
 
 ```
 VVRAG_QDRANT_URL=https://<cluster>.qdrant.io:6333
@@ -335,6 +444,25 @@ the forbidden list in `test_core_is_light.py`.
 
 **Adapter-load assertion.** Unit test that a missing-key report raises.
 
+**Grid geometry round-trip.** For a page whose stored payload says the grid is
+`n_x by n_y`, assert `n_x * n_y + n_special == len(vectors)`. This is the cheap
+invariant that catches a grid recorded from the wrong image, a changed
+`spatial_merge_size`, or special tokens miscounted. Test on both a portrait and a
+landscape page, since the grid is aspect-ratio dependent and a square-grid
+assumption would pass on neither by accident.
+
+**Provenance mismatch refuses.** Assert that querying a collection with an
+embedder whose `model_id`, `quantization`, `dtype`, or `render_dpi` differs from
+the stored points raises rather than returning results. This is the guard against
+the silent index/query drift described in 6.2.1, and it must fail loudly because
+its whole purpose is to prevent a plausible wrong answer.
+
+**Pooled vectors are consistent with originals.** Assert that
+`mean_pooling_rows` equals the row-wise mean of the image patches in `original`,
+excluding special tokens. Written in S3 even though pooling is unused until S7,
+because a silently wrong pooled vector would only surface as degraded rerank
+quality much later and would be misattributed to the technique.
+
 ## 10. Operational note
 
 The `pages` collection currently holds 8 points from design-time smoke testing.
@@ -349,15 +477,37 @@ be mistaken for corpus data.
 - `vvrag search "<question>" -k 5` returns ranked `RetrievedPage` values.
 - Known-item retrieval passes on the real corpus.
 - Qdrant ranking matches local numpy MaxSim exactly.
+- Every stored point carries the full geometry and provenance payload of 6.2.1,
+  verified by the round-trip invariant `n_x * n_y + n_special == len(vectors)` on
+  both a portrait and a landscape page.
+- All three named vectors are populated, and the pooled ones are verified against
+  the originals even though S3 does not query them.
+- A provenance mismatch between the query embedder and the collection raises
+  rather than returning results.
 - `test_core_is_light.py` passes with `qdrant_client` added.
 - The full suite passes; `ruff check` and `ruff format --check` are clean.
 - `uv.lock` pins the retrieval stack.
 
 ## 12. What S4 gets from this
 
-A ranked page list with scores, and the query token vectors used to produce it.
+A ranked page list with scores, the query token vectors used to produce it, and
+the per-page patch grid geometry.
+
 S4's snap-to-box needs the query-to-patch similarity matrix, which is
-`query_vectors @ page_vectors.T`, exactly the intermediate MaxSim already
-computes. The patch grid geometry (747 vectors per page at a known render DPI)
-is what maps a patch index back to a page region, so that the heatmap can rank
-the candidate boxes S2 already stores.
+`query_vectors @ page_vectors.T`, exactly the intermediate that MaxSim already
+computes. Turning a column of that matrix into a page region requires three
+things from this slice, all of them stored per page in 6.2.1:
+
+1. `n_patches_x`, `n_patches_y`, so patch index `i` maps to grid cell
+   `(i % n_x, i // n_x)` and then to a normalized page rectangle. The grid is
+   per page, not a global constant.
+2. `n_special_tokens`, so the 11 non-image vectors are **excluded** before any
+   argmax. A special token has no page region, and mapping one anyway would
+   produce a confidently-drawn box with no causal link to the evidence.
+3. `render_dpi`, so patch geometry and the S2 word boxes are expressed against
+   the same page rect.
+
+With those, the heatmap ranks the candidate boxes S2 already stores, which is
+snap-to-box. Note what S4 does *not* need: any ability to draw a box from pixels.
+The grid only ever selects among existing text-layer boxes, which is the
+distinction the proposal's gap argument rests on.
