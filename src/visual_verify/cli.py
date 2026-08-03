@@ -7,6 +7,7 @@ argparse rather than click or typer, so the CLI adds no dependency at all.
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -274,6 +275,111 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+# A real Qdrant `:memory:` client has no server behind it: each QdrantClient(
+# ":memory:") call constructs an independent, empty backend, so a fresh
+# QdrantIndex for every CLI invocation would make `vvrag embed` and a later
+# `vvrag search` never see each other's data. Cache one QdrantIndex per
+# (qdrant_url, db_url) pair instead of per (qdrant_url, collection): the url
+# string ":memory:" alone is identical across every test, but db_url is
+# derived from each test's own tmp_path, so it doubles as the isolation key
+# tests already have for free, with no extra reset hook needed. Real Postgres
+# and Qdrant Cloud never hit this branch at all. Not thread-safe, but the CLI
+# is invoked once per process, never concurrently.
+_MEMORY_INDEX_CACHE: dict[tuple[str, str], "object"] = {}
+
+
+def _make_embedder(settings: Settings):
+    """The fake keeps CLI tests off the GPU; anything else loads the real model."""
+    if os.getenv("VVRAG_FAKE_EMBEDDER"):
+        from visual_verify.retrieval.types import FakeEmbedder
+
+        return FakeEmbedder()
+    from visual_verify.retrieval.embedder import ColQwen2Embedder
+
+    return ColQwen2Embedder(render_dpi=settings.render_dpi)
+
+
+def _make_index(settings: Settings):
+    from visual_verify.retrieval.index import QdrantIndex
+
+    if not settings.qdrant_url:
+        raise SystemExit("VVRAG_QDRANT_URL is not set")
+
+    if settings.qdrant_url == ":memory:":
+        key = (settings.qdrant_url, settings.db_url)
+        index = _MEMORY_INDEX_CACHE.get(key)
+        if index is None:
+            index = QdrantIndex(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+            _MEMORY_INDEX_CACHE[key] = index
+    else:
+        index = QdrantIndex(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+
+    index.ensure_collection()
+    return index
+
+
+def cmd_embed(args: argparse.Namespace) -> int:
+    settings = Settings.from_env()
+    index = _make_index(settings)
+    embedder = _make_embedder(settings)
+
+    from visual_verify.retrieval.pipeline import embed_document
+
+    with _session(settings) as session:
+        if args.all:
+            shas = list(
+                session.scalars(select(Document.sha256).where(Document.status == "indexed"))
+            )
+        else:
+            found = _resolve_document(session, args.doc)
+            if found is None:
+                print(f"no document matching {args.doc!r}")
+                return 1
+            if isinstance(found, list):
+                print(f"ambiguous: {args.doc!r} matches {len(found)} documents")
+                width = max(len(Path(d.path).name) for d in found)
+                for d in found:
+                    print(f"  {Path(d.path).name:<{width}}  ({d.sha256[:12]})")
+                print("use a longer substring or a sha256 prefix")
+                return 1
+            shas = [found.sha256]
+
+        if not shas:
+            print("no indexed documents to embed; run `vvrag ingest` first")
+            return 1
+
+        total_embedded = total_skipped = 0
+        for sha in shas:
+            rows = [
+                (p.page_no, p.image_path)
+                for p in session.scalars(select(Page).where(Page.doc_sha == sha))
+            ]
+            result = embed_document(sha, rows, settings.pages_dir, embedder, index)
+            total_embedded += result.embedded
+            total_skipped += result.skipped
+            print(f"{sha[:12]}  embedded {result.embedded}  skipped {result.skipped}")
+
+    print(f"total: embedded {total_embedded}, skipped {total_skipped}")
+    return 0
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    settings = Settings.from_env()
+    index = _make_index(settings)
+    if index.count() == 0:
+        print("no pages indexed; run `vvrag embed --all` first")
+        return 1
+
+    embedder = _make_embedder(settings)
+    hits = index.search(embedder.embed_query(args.query), embedder.provenance, limit=args.k)
+    for rank, hit in enumerate(hits, 1):
+        print(
+            f"{rank}. {hit.doc_id[:12]}  page {hit.page:>4}  "
+            f"score {hit.score:7.3f}  {hit.image_ref}"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vvrag", description="Verifiable Visual RAG")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -305,6 +411,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect.add_argument("--overlay", help="write a PNG with boxes drawn on the page")
     p_inspect.set_defaults(func=cmd_inspect)
 
+    p_embed = sub.add_parser("embed", help="embed ingested pages into the vector index")
+    p_embed.add_argument("doc", nargs="?", help="document sha256, prefix, or path substring")
+    p_embed.add_argument("--all", action="store_true", help="embed every indexed document")
+    p_embed.set_defaults(func=cmd_embed)
+
+    p_search = sub.add_parser("search", help="rank pages against a question")
+    p_search.add_argument("query")
+    p_search.add_argument("-k", type=int, default=5, help="how many pages to return")
+    p_search.set_defaults(func=cmd_search)
+
     return parser
 
 
@@ -312,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "ingest" and not args.pdf and not args.directory:
         print("give a PDF path or --dir")
+        return 1
+    if args.command == "embed" and not args.doc and not args.all:
+        print("give a document or --all")
         return 1
     return int(args.func(args))
 
