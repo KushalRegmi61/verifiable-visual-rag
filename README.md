@@ -66,7 +66,8 @@ Configuration is environment-driven; nothing is hardcoded:
 | `VVRAG_DATA_DIR` | `data` | Page images and the SQLite file |
 | `VVRAG_RENDER_DPI` | `150` | Page render DPI, fixed per corpus |
 | `VVRAG_MIN_TEXT_PAGE_RATIO` | `0.6` | Born-digital gate threshold |
-| `VVRAG_QDRANT_URL` | unset | Vector index, used from S3 onward |
+| `VVRAG_QDRANT_URL` | unset | Qdrant instance for the S3 retrieval index |
+| `VVRAG_QDRANT_API_KEY` | unset | Qdrant API key |
 
 Only born-digital PDFs are accepted. Scanned documents are rejected by design:
 this project runs no OCR.
@@ -82,6 +83,28 @@ One test is marked `slow`: it builds the wheel, installs it into a throwaway
 virtualenv, and runs the `vvrag` console script from there, so that a path that
 only resolves inside a source checkout cannot pass unnoticed. It takes about 25
 seconds and runs by default; `uv run pytest -m "not slow"` skips it.
+
+## Running the retrieval index
+
+Requires the `retrieval` extra and a CUDA GPU with at least 3 GB free.
+
+```bash
+uv sync --all-extras --group dev
+export VVRAG_QDRANT_URL=...        # or put both in a gitignored .env
+export VVRAG_QDRANT_API_KEY=...
+
+uv run vvrag embed --all           # ~21 s/page, resumable
+uv run vvrag search "your question" -k 5
+```
+
+`embed` is a separate command from `ingest` on purpose. Ingest needs only the
+four core dependencies and no GPU; embedding needs a 2.5 GB torch stack and
+about 21 seconds per page. Keeping them apart means a machine with no GPU can
+still ingest a corpus, and only the machine that actually has one has to pull
+in the heavier stack.
+
+Interrupting `vvrag embed` is safe: each page is committed to Qdrant as it
+completes, and re-running resumes from the first unembedded page.
 
 ## Rebuilding the deck
 
