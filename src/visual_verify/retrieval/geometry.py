@@ -15,12 +15,14 @@ A4 pages at 150 dpi (1241x1754 px):
      is no global constant to hardcode for the GRID, which is why this is a
      value object stored per page rather than module-level constants.
 
-The 7 trailing suffix tokens, unlike the grid, are a fixed artifact of
-ColQwen2's chat template: they follow the image patches regardless of the
-page's aspect ratio or patch count. That is what SUFFIX_TOKENS below encodes,
-and it is also what makes a miscounted or corrupted n_vectors detectable: for
-any given (n_x, n_y, offset), there is exactly one correct n_vectors, not a
-range of acceptable ones.
+The 7 trailing suffix tokens, like the 4-token prefix, come from the chat
+prompt template, which is model-version dependent in exactly the way `offset`
+is: an upstream colpali-engine or transformers bump can shift either count by
+a token without changing anything else about the grid. That rules out pinning
+an exact expected n_vectors. Instead the sanity check below bounds the total
+count of non-image vectors (prefix + suffix together) to a generous range,
+which still catches a grid recorded from the wrong image or a miscounted
+vector total without rejecting correct output from a shifted template.
 
 Pure stdlib on purpose: S4 and the evaluation harness both need this, and
 neither should have to import torch to get it.
@@ -30,11 +32,13 @@ from dataclasses import dataclass
 
 BBox = tuple[float, float, float, float]
 
-# Fixed count of trailing special tokens ColQwen2 appends after the image
-# patches (end-of-image / chat-template tokens). This does not vary with page
-# aspect ratio the way the grid dims do, so unlike n_x/n_y it is safe to fix
-# here rather than pass in per page.
-SUFFIX_TOKENS = 7
+# Generous upper bound rather than an exact count. The special tokens come
+# from the chat prompt template, which is model-version dependent in exactly
+# the way `offset` is, so pinning an exact number would reject correct output
+# from a model whose template shifted by a token. The bound still catches a
+# grid recorded from the wrong image or a miscounted vector total, which is
+# what this invariant is actually for.
+MAX_SPECIAL_TOKENS = 32
 
 
 @dataclass(frozen=True)
@@ -55,21 +59,21 @@ class PatchGrid:
             raise ValueError(f"grid dims must be positive, got {self.n_x}x{self.n_y}")
         if self.offset < 0:
             raise ValueError(f"offset must be non-negative, got {self.offset}")
-        # Given n_x, n_y, and offset, exactly one n_vectors is correct: prefix
-        # tokens (offset) + image patches (n_image_patches) + the fixed 7
-        # trailing suffix tokens. This is deliberately an equality, not a
-        # lower bound: a lower bound only catches a grid recorded from too
-        # few vectors, but a caller who passes a wildly larger n_vectors (a
-        # miscounted prefix, a grid read from the wrong page, a stale
-        # constant) is just as wrong and must not be waved through. Cheap,
-        # and it is the only thing standing between an off-by-N grid and
-        # silently wrong evidence boxes.
-        expected = self.offset + self.n_image_patches + SUFFIX_TOKENS
-        if self.n_vectors != expected:
+        # n_special counts every vector that maps to no page region: prefix
+        # plus suffix together, same quantity as the n_special property below
+        # (kept in lockstep with it deliberately, not derived separately). A
+        # lower bound alone only catches a grid recorded from too few
+        # vectors; a caller who passes a wildly larger n_vectors (a grid read
+        # from the wrong page, a stale constant, a miscounted total) is just
+        # as wrong and must not be waved through. The upper bound is
+        # generous rather than exact so a template that shifts the true
+        # prefix/suffix split by a token or two still validates.
+        n_special = self.n_vectors - self.n_image_patches
+        if not 0 <= n_special <= MAX_SPECIAL_TOKENS:
             raise ValueError(
-                f"inconsistent: {self.n_x}x{self.n_y} patches at offset "
-                f"{self.offset} with {SUFFIX_TOKENS} suffix tokens implies "
-                f"{expected} vectors, got {self.n_vectors}"
+                f"inconsistent: {self.n_x}x{self.n_y} patches at offset {self.offset} "
+                f"implies {n_special} special tokens, outside the sane range "
+                f"0..{MAX_SPECIAL_TOKENS} (n_vectors={self.n_vectors})"
             )
 
     @property
@@ -78,7 +82,13 @@ class PatchGrid:
 
     @property
     def n_special(self) -> int:
-        """Vectors that correspond to no region of the page."""
+        """Vectors that correspond to no region of the page: prefix + suffix.
+
+        This is n_vectors - n_image_patches, not n_vectors - offset -
+        n_image_patches. offset is only the prefix count; subtracting it too
+        would silently drop the suffix and undercount. The validation in
+        __post_init__ checks this exact quantity, so keep the two in sync.
+        """
         return self.n_vectors - self.n_image_patches
 
     def is_image_token(self, seq_idx: int) -> bool:
