@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from visual_verify.retrieval.geometry import PatchGrid
-from visual_verify.retrieval.index import QdrantIndex
+from visual_verify.retrieval.index import QdrantIndex, SchemaMismatch
 from visual_verify.retrieval.provenance import ProvenanceMismatch
 from visual_verify.retrieval.types import FakeEmbedder, PageEmbedding
 
@@ -224,3 +224,82 @@ def test_ranking_is_maxsim_not_mean_similarity(index, embedder):
     # Step 2: Qdrant's real ranking must match the MaxSim answer (A first),
     # not the mean answer (which would rank B first).
     assert [h.page for h in hits] == [0, 1]
+
+
+def test_ensure_collection_accepts_its_own_schema(index):
+    """The happy path must not be broken by the schema check."""
+    index.ensure_collection()
+    index.ensure_collection()  # second call verifies rather than recreates
+    assert index.count() == 0
+
+
+def test_ensure_collection_refuses_an_unnamed_vector_collection(index):
+    """Existence is not compatibility.
+
+    A collection predating the named-vector schema still connects fine. Without
+    this check it would fail an upsert with an opaque Qdrant error, or accept
+    the writes and return confidently ranked wrong results. The project's own
+    cloud collection was in exactly this state.
+    """
+    from qdrant_client import models
+
+    index.client.create_collection(
+        collection_name=index.collection,
+        vectors_config=models.VectorParams(size=128, distance=models.Distance.COSINE),
+    )
+    with pytest.raises(SchemaMismatch, match="unnamed"):
+        index.ensure_collection()
+
+
+def test_ensure_collection_refuses_a_missing_named_vector(index):
+    from qdrant_client import models
+
+    params = models.VectorParams(
+        size=128,
+        distance=models.Distance.COSINE,
+        multivector_config=models.MultiVectorConfig(
+            comparator=models.MultiVectorComparator.MAX_SIM
+        ),
+        hnsw_config=models.HnswConfigDiff(m=0),
+    )
+    index.client.create_collection(
+        collection_name=index.collection,
+        vectors_config={"original": params},  # pooled vectors absent
+    )
+    with pytest.raises(SchemaMismatch, match="mean_pooling"):
+        index.ensure_collection()
+
+
+def test_ensure_collection_refuses_a_wrong_dimension(index):
+    from qdrant_client import models
+
+    params = models.VectorParams(
+        size=64,  # not DIM
+        distance=models.Distance.COSINE,
+        multivector_config=models.MultiVectorConfig(
+            comparator=models.MultiVectorComparator.MAX_SIM
+        ),
+    )
+    index.client.create_collection(
+        collection_name=index.collection,
+        vectors_config={
+            "original": params,
+            "mean_pooling_rows": params,
+            "mean_pooling_cols": params,
+        },
+    )
+    with pytest.raises(SchemaMismatch, match="size=64"):
+        index.ensure_collection()
+
+
+def test_recreate_overrides_a_bad_schema(index):
+    """recreate=True is the documented escape hatch, and it must work."""
+    from qdrant_client import models
+
+    index.client.create_collection(
+        collection_name=index.collection,
+        vectors_config=models.VectorParams(size=128, distance=models.Distance.COSINE),
+    )
+    index.ensure_collection(recreate=True)
+    index.ensure_collection()  # now verifies clean
+    assert index.count() == 0

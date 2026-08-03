@@ -26,6 +26,10 @@ POOL_COLS = "mean_pooling_cols"
 POINT_NS = uuid.UUID("5ee1d73c-35dc-53bb-8bf7-94bd98b0b932")
 
 
+class SchemaMismatch(RuntimeError):
+    """An existing collection's vector schema is not the one this code writes."""
+
+
 def point_id(doc_sha: str, page_no: int) -> str:
     """Deterministic, so re-embedding overwrites instead of duplicating."""
     return str(uuid.uuid5(POINT_NS, f"{doc_sha}:{page_no}"))
@@ -55,9 +59,51 @@ class QdrantIndex:
             hnsw_config=models.HnswConfigDiff(m=0),
         )
 
+    def _check_schema(self) -> None:
+        """Refuse a pre-existing collection whose schema is not the one we write.
+
+        Existence is not the same as compatibility, and the gap is dangerous.
+        A collection left over from an earlier schema (a single unnamed vector,
+        a different dimension, or a comparator other than MAX_SIM) will still
+        accept a connection. Depending on which field differs it then either
+        fails an upsert with an opaque Qdrant error, or worse, accepts the
+        writes and returns confidently ranked wrong results.
+
+        This was not hypothetical: the project's own cloud collection was
+        created during design-time smoke testing with a single unnamed vector,
+        before the three-named-vector schema existed.
+        """
+        cfg = self.client.get_collection(self.collection).config.params.vectors
+        if not isinstance(cfg, dict):
+            raise SchemaMismatch(
+                f"collection {self.collection!r} holds a single unnamed vector, but this "
+                f"code writes named vectors {sorted([ORIGINAL, POOL_ROWS, POOL_COLS])}. "
+                "It predates the current schema. Recreate it with "
+                "ensure_collection(recreate=True), which DELETES its contents."
+            )
+        missing = {ORIGINAL, POOL_ROWS, POOL_COLS} - set(cfg)
+        if missing:
+            raise SchemaMismatch(
+                f"collection {self.collection!r} is missing named vectors {sorted(missing)}. "
+                "Qdrant cannot add one to an existing collection, so this needs "
+                "ensure_collection(recreate=True), which DELETES its contents."
+            )
+        for name in (ORIGINAL, POOL_ROWS, POOL_COLS):
+            got = cfg[name]
+            comparator = got.multivector_config.comparator if got.multivector_config else None
+            if got.size != DIM or comparator != models.MultiVectorComparator.MAX_SIM:
+                raise SchemaMismatch(
+                    f"named vector {name!r} in {self.collection!r} is "
+                    f"size={got.size} comparator={comparator}, expected "
+                    f"size={DIM} comparator={models.MultiVectorComparator.MAX_SIM}. "
+                    "Scores from this collection would not be MaxSim."
+                )
+
     def ensure_collection(self, recreate: bool = False) -> None:
         exists = self.client.collection_exists(self.collection)
         if exists and not recreate:
+            # Verify rather than assume. See _check_schema.
+            self._check_schema()
             return
         if exists:
             self.client.delete_collection(self.collection)
