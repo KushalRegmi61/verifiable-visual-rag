@@ -104,6 +104,8 @@ class QdrantIndex:
         if exists and not recreate:
             # Verify rather than assume. See _check_schema.
             self._check_schema()
+            # Idempotent, and an older collection may predate the index.
+            self._ensure_payload_index()
             return
         if exists:
             self.client.delete_collection(self.collection)
@@ -111,6 +113,31 @@ class QdrantIndex:
         self.client.create_collection(
             collection_name=self.collection,
             vectors_config={ORIGINAL: params, POOL_ROWS: params, POOL_COLS: params},
+        )
+        self._ensure_payload_index()
+
+    def _ensure_payload_index(self) -> None:
+        """Index doc_sha, which resumption filters on.
+
+        A real Qdrant server REFUSES to filter on an unindexed payload field:
+
+            400 Bad Request: Index required but not found for "doc_sha"
+            of one of the following types: [keyword]
+
+        The local in-memory client used by the tests happily filters without
+        one, so every test passes and `existing_page_nos` fails on the first
+        call against the real cluster. Resumption depends entirely on that
+        function, so the divergence takes out the whole slice.
+
+        Same shape as the SQLite/Postgres timezone trap recorded in CLAUDE.md:
+        the development backend is more permissive than production, so the bug
+        can only appear in the environment that matters.
+        """
+        self.client.create_payload_index(
+            collection_name=self.collection,
+            field_name="doc_sha",
+            field_schema=models.PayloadSchemaType.KEYWORD,
+            wait=True,
         )
 
     def count(self) -> int:

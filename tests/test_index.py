@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from qdrant_client import models
 
 from visual_verify.retrieval.geometry import PatchGrid
 from visual_verify.retrieval.index import QdrantIndex, SchemaMismatch
@@ -303,3 +304,51 @@ def test_recreate_overrides_a_bad_schema(index):
     index.ensure_collection(recreate=True)
     index.ensure_collection()  # now verifies clean
     assert index.count() == 0
+
+
+def test_ensure_collection_requests_a_doc_sha_payload_index(index):
+    """A real Qdrant server refuses to filter on an unindexed payload field:
+
+        400 Bad Request: Index required but not found for "doc_sha"
+
+    `existing_page_nos` filters on doc_sha, and resumption depends entirely on
+    it, so the whole slice fails on the first call against a real cluster.
+
+    This asserts the CALL rather than its effect, which is unusual but forced:
+    local Qdrant warns "Payload indexes have no effect in the local Qdrant" and
+    reports an empty payload_schema, so the effect is unobservable here. The
+    call is the load-bearing part, and the realistic regression is someone
+    deleting it after seeing it do nothing in the tests.
+    """
+    calls = []
+    real = index.client.create_payload_index
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    index.client.create_payload_index = spy
+    index.ensure_collection(recreate=True)
+
+    assert calls, "ensure_collection must request a doc_sha payload index"
+    assert calls[0]["field_name"] == "doc_sha"
+    assert calls[0]["field_schema"] == models.PayloadSchemaType.KEYWORD
+
+
+def test_verify_pass_also_requests_the_index(index, embedder):
+    """A collection created before the index existed must gain it on next open."""
+    index.ensure_collection()
+    _add(index, embedder, "a.png", 0)
+
+    calls = []
+    real = index.client.create_payload_index
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    index.client.create_payload_index = spy
+    index.ensure_collection()  # verify path, not recreate
+
+    assert calls, "the verify path must also request the index"
+    assert index.existing_page_nos(SHA) == {0}
