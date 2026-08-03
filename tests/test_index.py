@@ -1,11 +1,13 @@
 import numpy as np
 import pytest
 
+from visual_verify.retrieval.geometry import PatchGrid
 from visual_verify.retrieval.index import QdrantIndex
 from visual_verify.retrieval.provenance import ProvenanceMismatch
-from visual_verify.retrieval.types import FakeEmbedder
+from visual_verify.retrieval.types import FakeEmbedder, PageEmbedding
 
 SHA = "a" * 64
+DIM = 128
 
 
 @pytest.fixture
@@ -144,3 +146,81 @@ def test_recreate_clears_points(index, embedder):
     _add(index, embedder, "a.png", 0)
     index.ensure_collection(recreate=True)
     assert index.count() == 0
+
+
+def _basis(k: int) -> np.ndarray:
+    """The k-th standard basis vector in R^DIM: unit norm and orthogonal to
+    every other basis vector by construction, which is what lets us pick exact
+    dot products by hand instead of hoping random noise cooperates."""
+    v = np.zeros(DIM, dtype=np.float32)
+    v[k] = 1.0
+    return v
+
+
+def _grid_2x2() -> PatchGrid:
+    return PatchGrid(n_x=2, n_y=2, offset=0, n_vectors=4)
+
+
+def _max_score(q: np.ndarray, vectors: np.ndarray) -> float:
+    """sum over query tokens of the per-token MAX over patches: real MaxSim."""
+    return float((q @ vectors.T).max(axis=1).sum())
+
+
+def _mean_score(q: np.ndarray, vectors: np.ndarray) -> float:
+    """sum over query tokens of the per-token MEAN over patches: the
+    aggregation a wrongly-configured (e.g. plain-cosine, no multivector)
+    collection would effectively produce instead."""
+    return float((q @ vectors.T).mean(axis=1).sum())
+
+
+def test_ranking_is_maxsim_not_mean_similarity(index, embedder):
+    """FakeEmbedder's signal is too easy to discriminate comparators: a query's
+    own patch vectors are exact unit matches (dot 1.0) against its page and
+    near-orthogonal elsewhere, so the true page wins under max, mean, or nearly
+    any other aggregation. That made test_qdrant_ranking_matches_local_maxsim
+    pass even when its local reference formula was swapped from max to mean.
+
+    This test builds two pages by hand from an orthonormal basis so the two
+    aggregations are forced to disagree: page A has one patch nearly identical
+    to the query (high max, low mean over its patches) and page B has many
+    patches at a moderate, uniform similarity (lower max, higher mean).
+
+    Step 1 below asserts the two local formulas actually pick different
+    winners. That assertion is what keeps this test honest: if the hand-built
+    vectors ever stopped disagreeing (a careless edit changing a magnitude),
+    step 1 fails loudly instead of the test silently degrading back into a
+    tautology that passes regardless of which comparator Qdrant is running.
+    """
+    q = _basis(0)[None, :]  # one query token, unit vector e0
+
+    # Page A: one patch equal to e0 (dot 1.0), three patches orthogonal to it
+    # (dot 0.0). max = 1.0, mean = 0.25.
+    a_vectors = np.stack([_basis(0), _basis(1), _basis(2), _basis(3)])
+    # Page B: four patches all at a uniform, moderate similarity to e0. Built
+    # from two orthonormal basis directions so each row is already unit norm:
+    # 0.5**2 + (sqrt(3)/2)**2 == 1.0. max = 0.5, mean = 0.5.
+    b_dir = (0.5 * _basis(0) + np.sqrt(3) / 2 * _basis(1)).astype(np.float32)
+    b_vectors = np.stack([b_dir, b_dir, b_dir, b_dir])
+
+    grid = _grid_2x2()
+    page_a = PageEmbedding(vectors=a_vectors, grid=grid)
+    page_b = PageEmbedding(vectors=b_vectors, grid=grid)
+
+    max_a, max_b = _max_score(q, a_vectors), _max_score(q, b_vectors)
+    mean_a, mean_b = _mean_score(q, a_vectors), _mean_score(q, b_vectors)
+    print(f"max: A={max_a:.4f} B={max_b:.4f}  mean: A={mean_a:.4f} B={mean_b:.4f}")
+
+    # Step 1: test the test. If these ever agreed, every assertion below would
+    # pass no matter which aggregation Qdrant actually used.
+    assert max_a > max_b, "hand-built page A must win under max, or this test is a tautology"
+    assert mean_b > mean_a, "hand-built page B must win under mean, or this test is a tautology"
+
+    index.ensure_collection()
+    index.upsert_page(SHA, 0, f"{SHA}/a.png", page_a, embedder.provenance)
+    index.upsert_page(SHA, 1, f"{SHA}/b.png", page_b, embedder.provenance)
+
+    hits = index.search(q, embedder.provenance, limit=2)
+
+    # Step 2: Qdrant's real ranking must match the MaxSim answer (A first),
+    # not the mean answer (which would rank B first).
+    assert [h.page for h in hits] == [0, 1]
