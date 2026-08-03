@@ -17,7 +17,7 @@ Pure stdlib on purpose: the query path must be able to check compatibility
 before deciding whether loading a multi-gigabyte model is even worthwhile.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 
 
 class ProvenanceMismatch(RuntimeError):
@@ -26,12 +26,33 @@ class ProvenanceMismatch(RuntimeError):
 
 @dataclass(frozen=True)
 class EmbedProvenance:
+    """What produced a stored vector.
+
+    Every field is load-bearing: vectors from different models,
+    quantizations, dtypes, or render DPIs are not comparable.
+    """
+
     model_id: str
     model_revision: str
     quantization: str
     dtype: str
     render_dpi: int
     embed_version: int
+
+    def __post_init__(self) -> None:
+        # An empty or blank string field would compare equal to another
+        # empty field, so two indexes that share nothing but their
+        # emptiness would pass require_compatible. That is the guard
+        # silently failing to guard, so blanks are rejected here rather
+        # than left to be caught downstream.
+        for field_name in ("model_id", "model_revision", "quantization", "dtype"):
+            value = getattr(self, field_name)
+            if not value.strip():
+                raise ValueError(f"{field_name} must not be empty, got {value!r}")
+        if self.render_dpi <= 0:
+            raise ValueError(f"render_dpi must be positive, got {self.render_dpi}")
+        if self.embed_version < 0:
+            raise ValueError(f"embed_version must be non-negative, got {self.embed_version}")
 
     def to_payload(self) -> dict[str, str | int]:
         """Flat scalars only; Qdrant payload values must be JSON primitives."""
@@ -47,7 +68,7 @@ class EmbedProvenance:
         latter would raise TypeError on the very first unrelated key Qdrant
         happens to store.
         """
-        return cls(**{f: payload[f] for f in cls.__dataclass_fields__})
+        return cls(**{f.name: payload[f.name] for f in fields(cls)})
 
     def require_compatible(self, other: "EmbedProvenance") -> None:
         """Raise unless `other` produced vectors comparable with ours.
@@ -56,11 +77,11 @@ class EmbedProvenance:
         of the same model can ship different weights, and a different render DPI
         changes the patch grid, so neither is a cosmetic difference.
         """
-        for field in self.__dataclass_fields__:
-            mine, theirs = getattr(self, field), getattr(other, field)
+        for f in fields(self):
+            mine, theirs = getattr(self, f.name), getattr(other, f.name)
             if mine != theirs:
                 raise ProvenanceMismatch(
-                    f"{field} differs: index holds {mine!r}, embedder is {theirs!r}. "
+                    f"{f.name} differs: index holds {mine!r}, embedder is {theirs!r}. "
                     "These vectors are not comparable. Re-embed the corpus or use "
                     "the original embedder."
                 )

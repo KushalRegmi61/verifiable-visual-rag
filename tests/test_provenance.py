@@ -51,6 +51,23 @@ def test_payload_keys_are_flat_scalars():
         assert isinstance(value, (str, int))
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("render_dpi", 0),
+        ("render_dpi", -1),
+        ("embed_version", -1),
+        ("model_id", ""),
+        ("model_revision", "  "),
+        ("quantization", ""),
+        ("dtype", ""),
+    ],
+)
+def test_rejects_invalid_field(field, value):
+    with pytest.raises(ValueError):
+        EmbedProvenance(**{**BASE.to_payload(), field: value})
+
+
 def test_from_payload_tolerates_extra_keys():
     """The real Qdrant payload also holds doc_sha, page_no, image_path,
     n_patches_x, etc. from_payload is called on that whole dict, not on a
