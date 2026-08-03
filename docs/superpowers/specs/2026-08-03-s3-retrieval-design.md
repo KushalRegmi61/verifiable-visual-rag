@@ -101,15 +101,55 @@ so a 300-page ingest is about 1.8 hours rather than 50 minutes. That is an
 offline one-time cost against a corpus built once, and section 6 makes it
 resumable.
 
-colSmol-500M is retained in this document as a measured fallback rather than an
-assumed one. If corpus size grows enough that 2x ingest time matters, the
-substitution is a config change, and the numbers to justify it in the report are
-already in the table above.
+### 3.1 Why not colSmol, despite being 2x faster
 
-Note for anyone revisiting the earlier assumption: colSmol produces **871**
-patch vectors per page against ColQwen2's 747. An earlier estimate that a
-smaller model would yield a coarser heatmap, and therefore weaken snap-to-box in
-S4, was wrong. SmolVLM's image splitting gives it more grid resolution, not less.
+colSmol-500M embeds at 10.0 s/page against ColQwen2's 21.4, and matched it at
+1.00/1.00 on this project's known-item check. It is nonetheless **not usable for
+this project**, for two reasons of very different weight.
+
+**Retrieval quality.** On ViDoRe V2, ColQwen2 v1.0 averages nDCG@5 of 0.583
+against colSmol-500M's 0.455: 12.8 points absolute, about 28 percent relative.
+The known-item check cannot see this gap, and was never meant to. Feeding a
+verbatim sentence from a page back as its own query is the easiest possible
+retrieval task, so it is a floor that detects breakage, not a measure that ranks
+quality.
+
+**Snap-to-box is impossible with colSmol.** This is the decisive reason.
+
+```python
+ColIdefics3Processor.get_n_patches(...)
+    raise NotImplementedError("This method is not implemented for ColIdefics3.")
+```
+
+The mapping from patch index to page region simply does not exist for this model
+family, and the cause is architectural rather than an oversight. colSmol sets
+`do_image_splitting=True` with `max_image_size=512`, so a 1241x1754 page is cut
+into several 512-pixel tiles, each embedded separately, **plus a global
+thumbnail**, and the results are concatenated. Its 871 vectors are therefore not
+a grid at all: they are patches from different tiles at different offsets, mixed
+with thumbnail patches that correspond to the whole page rather than to any
+region of it.
+
+Section 12 requires a patch index to resolve to a page rectangle so the heatmap
+can rank S2's candidate boxes. Under colSmol that would mean reverse-engineering
+an undocumented tile layout, and a thumbnail patch winning the argmax would
+yield a box spanning the entire page. A confidently-drawn region with no causal
+relationship to the evidence is precisely the failure this project is built to
+prevent.
+
+ColQwen2 by contrast exposes a single flat 23x32 grid through a supported API
+(see 2.1), so patch `i` resolves to grid cell `(i % n_x, i // n_x)`.
+
+**Correction to an earlier note in this document.** A previous revision recorded
+that colSmol's 871 vectors gave it *more* grid resolution than ColQwen2's 747,
+and that an earlier worry about a coarser heatmap had been backwards. That was
+wrong. The 871 vectors are not a single grid, so the counts are not comparable,
+and the original worry was closer to correct than the correction was.
+
+colSmol therefore remains a documented, measured alternative **for page ranking
+only**. It is not a drop-in fallback for this system, because it cannot support
+the grounding pillar. Substituting it would mean shipping retrieval without
+snap-to-box.
 
 ## 4. Embedder invariants
 
