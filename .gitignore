@@ -223,3 +223,13 @@ CLAUDE.md
 # project data
 data/
 *.db
+
+# Report deliverables: built artifacts and large binaries, kept out of GitHub on
+# purpose. research/ IS tracked, since those are the written source documents.
+proposal_report/
+presentation/
+references/
+emblem.png
+
+# Raw prior Claude Code transcript (~11 MB), kept locally for context recovery only.
+notes/
