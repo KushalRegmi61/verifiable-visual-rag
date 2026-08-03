@@ -24,6 +24,9 @@ retrieval = [
     "torch==2.6.0",
     "torchvision==0.21.0",
     "qdrant-client>=1.12",
+    # Required for the nf4 4-bit quantization in embedder.py. Neither
+    # colpali-engine nor accelerate pulls this in transitively.
+    "bitsandbytes>=0.43",
 ]
 
 [project.scripts]
