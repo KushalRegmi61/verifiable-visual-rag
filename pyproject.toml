@@ -12,6 +12,19 @@ dependencies = [
 
 [project.optional-dependencies]
 store = ["sqlalchemy>=2.0", "alembic>=1.13"]
+# PINNED EXACTLY, DO NOT RELAX. Three of four version combinations tried are
+# broken, and the dangerous one fails SILENTLY: colpali-engine 0.3.17 with
+# transformers 5.x randomly initializes the LoRA adapter and the projection
+# head, which drops known-item retrieval top-1 from 1.00 to 0.125 while
+# reporting only an informational table. torch and torchvision must move
+# together or torchvision's compiled ops fail to load.
+retrieval = [
+    "colpali-engine==0.3.10",
+    "transformers>=4.51,<4.52",
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "qdrant-client>=1.12",
+]
 
 [project.scripts]
 vvrag = "visual_verify.cli:main"

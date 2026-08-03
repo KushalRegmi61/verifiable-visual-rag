@@ -41,3 +41,13 @@ def test_qdrant_url_defaults_to_none(monkeypatch):
 def test_env_overrides_min_text_page_ratio(monkeypatch):
     monkeypatch.setenv("VVRAG_MIN_TEXT_PAGE_RATIO", "0.8")
     assert Settings.from_env().min_text_page_ratio == 0.8
+
+
+def test_qdrant_api_key_from_env(monkeypatch):
+    monkeypatch.setenv("VVRAG_QDRANT_API_KEY", "secret-key")
+    assert Settings.from_env().qdrant_api_key == "secret-key"
+
+
+def test_qdrant_api_key_defaults_to_none(monkeypatch):
+    monkeypatch.delenv("VVRAG_QDRANT_API_KEY", raising=False)
+    assert Settings.from_env().qdrant_api_key is None

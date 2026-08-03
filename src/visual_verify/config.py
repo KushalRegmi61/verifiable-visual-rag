@@ -24,6 +24,7 @@ class Settings:
     render_dpi: int = DEFAULT_RENDER_DPI
     min_text_page_ratio: float = DEFAULT_TEXT_PAGE_RATIO
     qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -35,6 +36,7 @@ class Settings:
                 os.getenv("VVRAG_MIN_TEXT_PAGE_RATIO", DEFAULT_TEXT_PAGE_RATIO)
             ),
             qdrant_url=os.getenv("VVRAG_QDRANT_URL"),
+            qdrant_api_key=os.getenv("VVRAG_QDRANT_API_KEY"),
         )
 
     @property
