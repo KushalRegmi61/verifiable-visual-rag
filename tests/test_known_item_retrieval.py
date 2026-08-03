@@ -8,6 +8,8 @@ shaped, numerically healthy, unit-normalized vectors and was invisible to every
 other check.
 """
 
+import gc
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -39,7 +41,14 @@ def _maxsim(q, p):
 # not the stored index.
 @pytest.fixture(scope="module")
 def embedder():
-    return ColQwen2Embedder()
+    emb = ColQwen2Embedder()
+    yield emb
+    # See the matching teardown in test_embedder.py. Two live ColQwen2 instances
+    # do not fit in 4 GB, so a module that returns its embedder without freeing
+    # VRAM breaks whichever slow module happens to run next.
+    del emb
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 @pytest.fixture(scope="module")

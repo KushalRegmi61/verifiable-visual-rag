@@ -1,5 +1,7 @@
 """Real-model tests. All slow: they download ~4 GB and need a CUDA GPU."""
 
+import gc
+
 import numpy as np
 import pytest
 
@@ -14,7 +16,16 @@ from visual_verify.retrieval.embedder import ColQwen2Embedder  # noqa: E402
 
 @pytest.fixture(scope="module")
 def embedder():
-    return ColQwen2Embedder()
+    emb = ColQwen2Embedder()
+    yield emb
+    # Release VRAM before the next slow module loads its own ColQwen2. Two live
+    # instances do not fit in the 4 GB card, so without this teardown a full
+    # `uv run pytest` fails with CUDA OOM during weight loading even though each
+    # module passes on its own. Returning the fixture without freeing is the
+    # kind of thing that only breaks when the whole suite runs.
+    del emb
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def test_provenance_records_the_skipvis_quantization(embedder):
