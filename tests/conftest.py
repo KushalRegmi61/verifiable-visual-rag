@@ -97,3 +97,68 @@ def corrupt_pdf(tmp_path: Path) -> Path:
     path = tmp_path / "corrupt.pdf"
     path.write_bytes(b"%PDF-1.7\nthis is not a real pdf\n")
     return path
+
+
+@pytest.fixture(scope="module")
+def real_pdf_pages():
+    """Pages from the repo's own ingested corpus, if one exists.
+
+    Skips rather than fails when the corpus is absent, so a fresh clone can run
+    the suite without a two-hour ingest. Module-scoped: the only consumer is the
+    known-item retrieval suite, which embeds these pages with a real GPU model at
+    ~21s/page, so re-resolving the corpus per test (not per module) would not
+    itself be expensive, but it must match the scope of anything built on top of
+    it (see test_known_item_retrieval.py's module-scoped `corpus` fixture).
+    """
+
+    def _load(n: int):
+        import sqlite3
+
+        root = Path(__file__).resolve().parent.parent
+        db = root / "data" / "index.db"
+        pages_dir = root / "data" / "pages"
+        if not db.exists():
+            pytest.skip("no ingested corpus at data/index.db; run `vvrag ingest` first")
+        con = sqlite3.connect(db)
+        rows = con.execute(
+            "SELECT doc_sha, page_no, image_path FROM pages ORDER BY doc_sha, page_no LIMIT ?",
+            (n,),
+        ).fetchall()
+        con.close()
+        if not rows:
+            pytest.skip("corpus database has no pages")
+        sha = rows[0][0]
+        return sha, [(r[1], r[2]) for r in rows if r[0] == sha], pages_dir
+
+    return _load
+
+
+@pytest.fixture(scope="module")
+def real_page_sentences():
+    """(page_no, sentence) pairs taken verbatim from each page's text layer."""
+
+    def _load(sha: str, page_nos: list[int]):
+        import sqlite3
+
+        db = Path(__file__).resolve().parent.parent / "data" / "index.db"
+        con = sqlite3.connect(db)
+        rows = con.execute(
+            """
+            SELECT p.page_no, group_concat(b.text, ' ') AS line
+            FROM boxes b JOIN pages p ON b.page_id = p.id
+            WHERE b.kind = 'word' AND p.doc_sha = ?
+            GROUP BY p.id, b.block_no, b.line_no
+            ORDER BY length(line) DESC
+            """,
+            (sha,),
+        ).fetchall()
+        con.close()
+        wanted, seen, out = set(page_nos), set(), []
+        for page_no, line in rows:
+            words = line.split()
+            if page_no in wanted and page_no not in seen and 8 <= len(words) <= 25:
+                seen.add(page_no)
+                out.append((page_no, " ".join(words)))
+        return out
+
+    return _load
