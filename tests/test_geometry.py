@@ -69,3 +69,10 @@ def test_rejects_inconsistent_vector_count():
 def test_rejects_nonpositive_dims():
     with pytest.raises(ValueError):
         PatchGrid(n_x=0, n_y=32, offset=4, n_vectors=11)
+
+
+def test_rejects_offset_past_the_vector_count():
+    """n_special alone cannot catch this: 747 - 736 = 11 looks fine, but the
+    patch block starting at 500 runs off the end of a 747-vector sequence."""
+    with pytest.raises(ValueError, match="extend past"):
+        PatchGrid(n_x=23, n_y=32, offset=500, n_vectors=747)

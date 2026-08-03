@@ -59,6 +59,19 @@ class PatchGrid:
             raise ValueError(f"grid dims must be positive, got {self.n_x}x{self.n_y}")
         if self.offset < 0:
             raise ValueError(f"offset must be non-negative, got {self.offset}")
+        # This and the n_special bound below catch different failures and
+        # neither subsumes the other: an offset large enough to push the
+        # patch block past n_vectors can still leave n_special (n_vectors -
+        # n_image_patches) inside a sane range, since that quantity never
+        # looks at offset. Without this check, is_image_token/seq_to_patch
+        # would confidently map a seq_idx that has no backing vector to a
+        # well-formed rectangle.
+        if self.offset + self.n_image_patches > self.n_vectors:
+            raise ValueError(
+                f"image patches extend past the vector count: offset {self.offset} + "
+                f"{self.n_x}x{self.n_y} patches = "
+                f"{self.offset + self.n_image_patches} > n_vectors {self.n_vectors}"
+            )
         # n_special counts every vector that maps to no page region: prefix
         # plus suffix together, same quantity as the n_special property below
         # (kept in lockstep with it deliberately, not derived separately). A
