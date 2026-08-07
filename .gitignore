@@ -220,6 +220,9 @@ __marimo__/
 # Claude Code local guidance (not part of the deliverable)
 CLAUDE.md
 
+# Local repo explanation doc (not part of the deliverable)
+everythingExplained.md
+
 # project data
 data/
 *.db
