@@ -278,10 +278,14 @@ def test_snap_falls_back_to_the_block_when_lines_are_indistinguishable():
     r = np.full(grid.n_image_patches, 0.05)
     r[8:16] = 1.0
 
-    sel = snap_to_box(r, grid, page_boxes())
+    boxes = page_boxes()
+    sel = snap_to_box(r, grid, boxes)
 
     assert sel.resolution == "block"
     assert "beta" in sel.box.text
+    corners = (sel.box.x0, sel.box.y0, sel.box.x1, sel.box.y1)
+    allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
+    assert corners in allowed
 
 
 def test_snap_stays_inside_the_winning_block():
@@ -319,3 +323,56 @@ def test_snap_never_invents_a_box():
 
     allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
     assert corners in allowed
+
+
+def test_stage_two_never_leaves_the_winning_block():
+    """The bounded-error property that justifies two stages at all.
+
+    The hottest single line here belongs to the block that LOST stage 1. A flat
+    ranking over every line would return it. Two-stage selection must not: a
+    stage-2 mistake has to stay inside the correct paragraph.
+    """
+    grid = make_grid()
+    boxes = page_boxes()
+    r = np.full(grid.n_image_patches, 0.05)
+    # Block 0 wins stage 1 on total warmth across both its rows...
+    r[0:8] = 0.60
+    # ...while one line in block 1 is the single hottest thing on the page.
+    r[12] = 1.0
+    r[13] = 1.0
+
+    sel = snap_to_box(r, grid, boxes)
+
+    assert "alpha" in sel.box.text, f"selection escaped the winning block: {sel.box.text!r}"
+    assert "beta" not in sel.box.text
+
+
+def test_near_zero_scores_are_ambiguous_rather_than_a_clear_win():
+    """A relative margin over two near-zero scores measures nothing.
+
+    Without an absolute floor on the denominator, 1e-18 against 0.9e-18 is a
+    10 percent gap and resolves to a line, on an absolute difference of 1e-19.
+    """
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 1e-18)
+    r[12] = 1.1e-18
+
+    sel = snap_to_box(r, grid, page_boxes())
+
+    assert sel.resolution == "block"
+
+
+def test_single_line_block_resolves_as_line():
+    """No runner-up to be ambiguous against, so resolution is line outright."""
+    grid = make_grid()
+    boxes = [
+        box(0.05, 0.05, 0.45, 0.20, text="solo", block_no=0, line_no=0, kind="word"),
+        box(0.05, 0.55, 0.45, 0.90, text="other block", block_no=1, line_no=0, kind="word"),
+    ]
+    r = np.full(grid.n_image_patches, 0.05)
+    r[0] = 1.0  # inside block 0, the single-line block
+
+    sel = snap_to_box(r, grid, boxes)
+
+    assert sel.resolution == "line"
+    assert sel.box.text == "solo"
