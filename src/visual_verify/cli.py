@@ -470,6 +470,156 @@ def cmd_ground(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_reader():
+    """Reader from environment: VVRAG_READER_BACKEND in {hosted, local}.
+
+    hosted needs VVRAG_READER_URL (OpenAI-style chat-completions endpoint)
+    and optionally VVRAG_READER_KEY. local needs a GPU and the retrieval
+    extra; the model id defaults to the recorded pairing.
+    """
+    from visual_verify.verify.backends import HostedAPIReader, LocalVLMReader
+
+    backend = os.environ.get("VVRAG_READER_BACKEND", "hosted")
+    if backend == "hosted":
+        url = os.environ.get("VVRAG_READER_URL")
+        if not url:
+            raise ValueError("VVRAG_READER_URL is required for the hosted reader")
+        return HostedAPIReader(url=url, key=os.environ.get("VVRAG_READER_KEY"))
+    if backend == "local":
+        return LocalVLMReader()
+    raise ValueError(f"VVRAG_READER_BACKEND must be 'hosted' or 'local', got {backend!r}")
+
+
+def _build_verifier():
+    """Verifier from environment: VVRAG_VERIFIER_BACKEND in {hosted, local}."""
+    from visual_verify.verify.backends import HostedAPIVerifier, LocalVLMVerifier
+
+    backend = os.environ.get("VVRAG_VERIFIER_BACKEND", "local")
+    if backend == "hosted":
+        url = os.environ.get("VVRAG_VERIFIER_URL")
+        if not url:
+            raise ValueError("VVRAG_VERIFIER_URL is required for the hosted verifier")
+        return HostedAPIVerifier(url=url, key=os.environ.get("VVRAG_VERIFIER_KEY"))
+    if backend == "local":
+        return LocalVLMVerifier()
+    raise ValueError(f"VVRAG_VERIFIER_BACKEND must be 'hosted' or 'local', got {backend!r}")
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Ask a question against one page, end to end: read, ground, judge, gate.
+
+    This is the adapter: it fetches the page render, the word boxes, the
+    reconstructed text layer, and the stored vectors, and wires the reader
+    and verifier the environment asks for. verify() itself never fetches.
+    """
+    from visual_verify.derive import line_boxes
+    from visual_verify.retrieval.geometry import PatchGrid
+    from visual_verify.retrieval.index import ORIGINAL
+    from visual_verify.verify import VerifierError, verify
+
+    settings = Settings.from_env()
+    with _session(settings) as session:
+        found = _resolve_document(session, args.doc)
+        if found is None or isinstance(found, list):
+            print(f"no unique document matching {args.doc!r}")
+            return 1
+        doc = found
+        page = session.scalar(
+            select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
+        )
+        if page is None:
+            print(f"no page {args.page} in {Path(doc.path).name}")
+            return 1
+        boxes = [
+            _to_record(b)
+            for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
+        ]
+        image_path = settings.pages_dir / page.image_path
+
+    image = Image.open(image_path).convert("RGB")
+    text_layer = "\n".join(b.text for b in line_boxes(boxes))
+
+    try:
+        reader = _build_reader()
+        verifier = _build_verifier()
+    except ValueError as exc:
+        print(f"ask: {exc}")
+        return 1
+
+    # The visual path is fetched eagerly: claims only exist after the reader
+    # runs, so ask cannot know in advance whether one will need it, and the
+    # reader model dominates the per-ask cost anyway. S6's service holds the
+    # models in memory at startup; that is where per-request economy belongs.
+    page_vectors = grid = None
+    embed = None
+    index = _make_index(settings)
+    if index.count() > 0:
+        payload = index.get_payload(doc.sha256, args.page)
+        stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
+        grid = PatchGrid(
+            n_x=payload["n_patches_x"],
+            n_y=payload["n_patches_y"],
+            offset=payload["patch_offset"],
+            n_vectors=stored.shape[0],
+        )
+        page_vectors = stored
+        embedder = _make_embedder(settings)
+        embed = embedder.embed_query
+
+    try:
+        ans = verify(
+            args.question,
+            reader,
+            verifier,
+            page=args.page,
+            image=image,
+            text_layer=text_layer,
+            boxes=boxes,
+            embed=embed,
+            page_vectors=page_vectors,
+            grid=grid,
+            force=args.force_visual,
+            threshold=args.threshold,
+        )
+    except VerifierError as exc:
+        print(f"ask: {exc}")
+        return 1
+
+    print(f"answer: {ans.question} ->", end="")
+    if not ans.claims:
+        print(" (abstained: reader produced no checkable claims)")
+        return 0
+    for c in ans.claims:
+        if c.abstained:
+            print(f"  [ABSTAINED {c.confidence:.3f}] {c.text!r}")
+        else:
+            print(f"  [judged {c.confidence:.3f}] {c.text!r}")
+        for r in c.regions:
+            x0, y0, x1, y1 = r.bbox
+            marker = f" [{r.resolution}]" if r.resolution else ""
+            print(
+                f"    {r.modality:<6}{marker} score {r.score:7.3f}  "
+                f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]  {(r.text or '')[:60]}"
+            )
+    print(f"abstained_overall: {ans.abstained_overall}")
+
+    if args.overlay:
+        draw = ImageDraw.Draw(image)
+        for c in ans.claims:
+            if c.abstained:
+                continue
+            for r in c.regions:
+                x0, y0, x1, y1 = r.bbox
+                draw.rectangle(
+                    [x0 * image.width, y0 * image.height, x1 * image.width, y1 * image.height],
+                    outline=(226, 10, 22) if r.modality == "visual" else (16, 128, 64),
+                    width=3,
+                )
+        image.save(args.overlay)
+        print(f"wrote {args.overlay}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vvrag", description="Verifiable Visual RAG")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -522,6 +672,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ground.add_argument("--overlay", help="write a PNG with the region drawn on the page")
     p_ground.set_defaults(func=cmd_ground)
+
+    p_ask = sub.add_parser("ask", help="answer a question against one page, with abstention")
+    p_ask.add_argument("question", help="the question to answer")
+    p_ask.add_argument("--doc", required=True, help="document sha256, prefix, or path substring")
+    p_ask.add_argument("--page", type=int, required=True)
+    p_ask.add_argument(
+        "--force-visual",
+        action="store_true",
+        help="ground every claim with snap-to-box, never the text path",
+    )
+    p_ask.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="sufficiency score a claim must reach to be answered, not abstained",
+    )
+    p_ask.add_argument("--overlay", help="write a PNG with the surviving regions drawn")
+    p_ask.set_defaults(func=cmd_ask)
 
     return parser
 

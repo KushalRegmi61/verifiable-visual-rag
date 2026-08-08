@@ -198,7 +198,7 @@ Open question: which candidate granularity to rank, word or line or block or
 table cell. S2 stores words and derives the rest precisely so this can be
 retuned without re-ingesting.
 
-## S5: Reader and verifier (not started)
+## S5: Reader and verifier (in progress)
 
 **Objective.** Answer the question, split the answer into atomic claims, have a
 different model judge each claim against its evidence, and abstain when the
@@ -208,23 +208,38 @@ judgement is weak.
 toward it, which is why the verifier must be a different model. The rubric feeds
 a threshold that lets the system say it does not know.
 
-- [ ] Brainstorm and write the design spec
-- [ ] Write the implementation plan
-- [ ] **Decide the compute path** (see the blocker below)
-- [ ] Reader VLM answers from the retrieved page and its grounded regions
-- [ ] Decompose the answer into atomic claims. A sentence asserting two things
+- [x] Brainstorm and write the design spec
+- [x] Write the implementation plan
+- [x] **Decide the compute path** (see the blocker below, resolved)
+- [x] Reader VLM answers from the retrieved page and its grounded regions
+- [x] Decompose the answer into atomic claims. A sentence asserting two things
       cannot be grounded to one region.
-- [ ] Verifier VLM, deliberately a different model from the reader
-- [ ] Four-label rubric turning a judgement into a number a threshold can act on
-- [ ] Abstention gate. This is the point of the project: a wrong answer with a
+- [x] Verifier VLM, deliberately a different model from the reader
+- [x] Four-label rubric turning a judgement into a number a threshold can act on
+- [x] Abstention gate. This is the point of the project: a wrong answer with a
       confident box drawn on it is worse than no answer.
-- [ ] `verify()` takes data, an image and boxes, never a client handle
+- [x] `verify()` takes data, an image and boxes, never a client handle
+- [x] `vvrag ask "<question>" --doc ... --page ...`, the pipeline end to end
+- [x] Measure the local verifier's fit and speed on this card and record the
+      actual default pairing (spec 3.1 and 4; `tests/test_verify_live.py`)
 
-**Blocker, unresolved.** The design needs two different VLMs. ColQwen2 alone
-takes 2.65 GB of the card's 3.63 GB usable VRAM, and two model-loading processes
-OOM each other. Options: sequential load and unload, a hosted API for the
-verifier, or the campus GPU. This is a decision to settle by measurement the way
-the S3 retriever was, not something to code around.
+**Blocker, resolved by measurement.** The design needs two different VLMs, and
+the local card (RTX 4050, 6141 MiB total, ~3.63 GB usable after Windows
+reservation, ColQwen2 alone taking 2.65 GB) cannot hold a 7B model at all. The
+decision, recorded in the S5 design spec sections 3 and 4: reader and verifier
+sit behind protocols with a hosted and a local implementation each; the default
+pairing is a hosted Gemini-family reader plus a local Qwen-family verifier, so
+the independence rule holds across families. The core never constructs a model,
+so the campus-GPU story (both roles local, 7B-class) changes wiring, not code.
+
+**Measured default pairing (2026-08-08):** verifier = `Qwen/Qwen2-VL-2B-Instruct`
+(no 2B exists in the 2.5 family; that candidate was rejected by measurement).
+fp16 takes 4.2 GB and judges in ~16-20 s; nf4 4-bit takes 1.5 GB. The fp16 build
+cannot coexist with ColQwen2's 2.65 GB, so a process that needs both must load
+them sequentially or use the 4-bit build. An end-to-end ask on this card judged
+a true claim supported at confidence 1.0. The venv needed
+`torch==2.6.0+cu124` installed from the pytorch index: PyPI's Windows torch is
+CPU-only, and the uv lock otherwise resolves to it.
 
 ## S6: Product UI (not started)
 

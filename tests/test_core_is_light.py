@@ -34,3 +34,16 @@ def test_grounding_pulls_no_store_or_model_dependency():
     loaded = _modules_after_importing("visual_verify.grounding")
     leaked = [m for m in FORBIDDEN if m in loaded]
     assert not leaked, f"grounding leaked heavy deps: {leaked}"
+
+
+def test_verify_pulls_no_store_or_model_dependency():
+    """verify() must import without torch or transformers, ever.
+
+    backends.py lives inside the package and its local classes import the
+    model libraries lazily, at call time. If this fails, a lazy import
+    drifted to module level and the whole package became unimportable
+    without a GPU machine.
+    """
+    loaded = _modules_after_importing("visual_verify.verify")
+    leaked = [m for m in FORBIDDEN if m in loaded]
+    assert not leaked, f"verify leaked heavy deps: {leaked}"

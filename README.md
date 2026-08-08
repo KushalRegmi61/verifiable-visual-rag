@@ -97,7 +97,16 @@ uv run vvrag embed --all           # ~21 s/page, resumable
 uv run vvrag search "your question" -k 5
 uv run vvrag ground "<claim>" --doc <sha> --page <n> --overlay out.png
 uv run vvrag ground "<claim>" --doc <sha> --page <n> --force-visual   # what the eval measures
+uv run vvrag ask "your question" --doc <sha> --page <n>               # read, ground, judge, abstain
 ```
+
+`ask` is the full pipeline: the reader model answers from the page, each atomic
+claim is grounded, and a different model judges each claim against its region.
+Weak judgements abstain. The reader defaults to a hosted endpoint
+(`VVRAG_READER_URL`, `VVRAG_READER_KEY`); the verifier defaults to a local VLM
+(`VVRAG_VERIFIER_BACKEND=local`), and both can be flipped to `hosted` or `local`
+independently, as long as the pairing stays independent (never the same model
+for both roles).
 
 `embed` is a separate command from `ingest` on purpose. Ingest needs only the
 four core dependencies and no GPU; embedding needs a 2.5 GB torch stack and
