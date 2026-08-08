@@ -51,14 +51,47 @@ class Claim(BaseModel):
     regions: list[GroundedRegion] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     abstained: bool = False
+    # The verifier's rubric label, None until the verifier has run. Optional so
+    # existing consumers are unaffected; see this file's docstring. Kept as the
+    # label rather than reduced to `confidence` alone because the label is what
+    # decides show-or-abstain, and the UI and the eval both need to say WHICH
+    # verdict a claim received, not merely how strong it was.
+    label: (
+        Literal["supported", "partially_supported", "insufficient_evidence", "unsupported"] | None
+    ) = None
+    # Flagged by the reader's conjunction check: this claim appears to assert
+    # more than one thing, so its single region can only evidence part of it.
+    # Advisory, never a reason to drop the claim, because discarding it would
+    # lose an answer. The eval counts these as decomposition failures.
+    compound: bool = False
 
 
 class Answer(BaseModel):
     """The full response to a question."""
 
     question: str
+    # EVERY claim, including the ones that failed verification. The evaluation
+    # harness needs both to compute confident-wrong against coverage, so an
+    # abstained claim is marked rather than removed.
     claims: list[Claim] = Field(default_factory=list)
     abstained_overall: bool = False
+
+    @property
+    def shown(self) -> list["Claim"]:
+        """Only the claims that passed verification. Use this to display.
+
+        `claims` holds rejected claims too, so iterating it directly puts a
+        claim the verifier refused in front of a user, with its regions, and
+        withholding that is the entire point of the system. The guarantee would
+        otherwise rest on every consumer remembering a boolean. This exists so
+        the safe path is also the shortest one.
+
+        Requires `label is not None` as well as `not abstained`: a `Claim` that
+        never reached the verifier defaults to `abstained=False`, which would
+        otherwise read as passing. Absence of a verdict is not a passing
+        verdict, so an unverified claim is never shown.
+        """
+        return [c for c in self.claims if c.label is not None and not c.abstained]
 
 
 class RetrievedPage(BaseModel):

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from visual_verify import derive
 from visual_verify.config import Settings
+from visual_verify.contracts import Answer, Claim
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError
 from visual_verify.ingest.pipeline import ingest_pdf
@@ -470,6 +471,149 @@ def cmd_ground(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_claim(c: Claim, indent: str) -> None:
+    flag = " [compound]" if c.compound else ""
+    print(f"{indent}{c.label:<22} {c.confidence:.2f}  {c.text}{flag}")
+    for r in c.regions:
+        x0, y0, x1, y1 = r.bbox
+        box = f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]"
+        print(f"{indent}                      {r.modality:<6} {box}")
+
+
+def _print_ask_result(result: Answer, threshold: float) -> None:
+    """Print an Answer as two labelled sections: shown, then withheld.
+
+    This is a diagnostic view for inspecting the verifier's behaviour from a
+    terminal, not the product answer surface: S6's UI must read
+    `Answer.shown` and never touch `result.claims` directly, because iterating
+    `claims` puts a claim the verifier refused in front of a user. Here the
+    opposite is deliberate: a CLI whose entire purpose is showing how
+    abstention works would be useless if it hid abstained claims, because
+    there would be no way to distinguish "the reader never proposed this" from
+    "the reader proposed it and the verifier said no". The withheld claims are
+    still printed, just under a heading that says outright they are not part
+    of the answer, because "withheld" names a choice the system made, not data
+    that went missing.
+
+    `threshold` is printed so a saved transcript states the bar claims were
+    judged against. Without it, a run at --threshold 0 looks structurally
+    identical to a fully verified run: unsupported claims sit under the same
+    "Answer" heading with no marker of how permissive the gate was.
+    """
+    shown = result.shown
+    withheld = [c for c in result.claims if c.abstained]
+
+    print(f"threshold: {threshold}")
+    print(f"Answer ({len(shown)} claim(s) shown):")
+    for c in shown:
+        _print_claim(c, indent="  ")
+
+    if withheld:
+        print(f"\nWithheld ({len(withheld)} claim(s), not part of the answer):")
+        for c in withheld:
+            _print_claim(c, indent="  ")
+
+    if result.abstained_overall:
+        print("\nabstained: no claim on this page met the support threshold")
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Answer a question from one page, with every claim verified before it shows.
+
+    Mirrors cmd_ground's vector-fetching adapter pattern: it fetches the
+    page's stored vectors and grid so answer() and ground() never have to
+    touch Qdrant or a GPU directly. The difference from cmd_ground is that a
+    single claim's query embedding is computed there, once, from the fixed CLI
+    argument, whereas here the reader produces an unknown number of claims at
+    runtime, so answer() takes a bound `embed_query` callable and embeds each
+    claim's text itself as it is produced. The embedder is still constructed
+    exactly once here, up front, so it loads its weights once per command
+    rather than once per claim.
+    """
+    import math
+
+    from visual_verify.agent import AgentError, answer
+    from visual_verify.agent.cache import CachedChat
+    from visual_verify.agent.models import MissingApiKey, UnknownProvider, make_chat
+    from visual_verify.retrieval.geometry import PatchGrid
+    from visual_verify.retrieval.index import ORIGINAL
+
+    if not math.isfinite(args.threshold):
+        print(f"--threshold must be a finite number, got {args.threshold}")
+        return 1
+
+    settings = Settings.from_env()
+    with _session(settings) as session:
+        found = _resolve_document(session, args.doc)
+        if found is None or isinstance(found, list):
+            print(f"no unique document matching {args.doc!r}")
+            return 1
+        doc = found
+        page = session.scalar(
+            select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
+        )
+        if page is None:
+            print(f"no page {args.page} in {Path(doc.path).name}")
+            return 1
+        boxes = [
+            _to_record(b)
+            for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
+        ]
+        image_path = settings.pages_dir / page.image_path
+
+    # Unlike cmd_ground, the claim text is not known yet (the reader has not
+    # run), so there is no way to check span_boxes first and skip the vector
+    # fetch when the text path will suffice. Vectors are always fetched here;
+    # a claim that grounds through the text path simply never uses them.
+    index = _make_index(settings)
+    if index.count() == 0:
+        print("no pages indexed; run `vvrag embed` first")
+        return 1
+    payload = index.get_payload(doc.sha256, args.page)
+    stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
+    grid = PatchGrid(
+        n_x=payload["n_patches_x"],
+        n_y=payload["n_patches_y"],
+        offset=payload["patch_offset"],
+        n_vectors=stored.shape[0],
+    )
+    page_vectors = stored
+    embedder = _make_embedder(settings)
+
+    try:
+        reader = CachedChat(make_chat("reader", settings), settings.agent_cache_dir)
+        verifier = CachedChat(make_chat("verifier", settings), settings.agent_cache_dir)
+    except (MissingApiKey, UnknownProvider) as exc:
+        print(f"cannot build the models: {exc}")
+        return 1
+
+    try:
+        result = answer(
+            args.question,
+            image_path,
+            boxes,
+            page=args.page,
+            reader_chat=reader,
+            verifier_chat=verifier,
+            threshold=args.threshold,
+            page_vectors=page_vectors,
+            embed_query=embedder.embed_query,
+            grid=grid,
+        )
+    except AgentError as exc:
+        print(f"cannot answer: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 - a corrupt cache entry or a
+        # provider/network error must print a sentence, not a raw traceback;
+        # AgentError above already covers misconfiguration, this covers
+        # everything else that can surface from the client and cache layers.
+        print(f"cannot answer: {type(exc).__name__}: {exc}")
+        return 1
+
+    _print_ask_result(result, args.threshold)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vvrag", description="Verifiable Visual RAG")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -522,6 +666,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ground.add_argument("--overlay", help="write a PNG with the region drawn on the page")
     p_ground.set_defaults(func=cmd_ground)
+
+    p_ask = sub.add_parser("ask", help="answer a question from a page, with verification")
+    p_ask.add_argument("question")
+    p_ask.add_argument("--doc", required=True, help="document sha256, prefix, or path substring")
+    p_ask.add_argument("--page", type=int, required=True)
+    p_ask.add_argument(
+        "--threshold",
+        type=float,
+        # Settings.abstain_threshold, not a literal: VVRAG_ABSTAIN_THRESHOLD
+        # must actually change what an unflagged `vvrag ask` uses. Read once
+        # per parser build, which is once per CLI invocation.
+        default=Settings.from_env().abstain_threshold,
+        help="abstain below this score; the rubric's supported floor by default",
+    )
+    p_ask.set_defaults(func=cmd_ask)
 
     return parser
 

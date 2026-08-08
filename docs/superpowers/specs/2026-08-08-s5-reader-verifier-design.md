@@ -124,13 +124,21 @@ after the fact, and it goes in the eval output.
 ## 6. Abstention
 
 ```
-score = label_rank + confidence
+score = 2 * label_rank + confidence      confidence in [0, 1]
 
-  supported             3 + c
-  partially_supported   2 + c
-  insufficient_evidence 1 + c
-  unsupported           0 + c
+  supported             6 + c    band [6, 7]
+  partially_supported   4 + c    band [4, 5]
+  insufficient_evidence 2 + c    band [2, 3]
+  unsupported           0 + c    band [0, 1]
 ```
+
+**The rank multiplier is load-bearing.** With ranks spaced by 1 the bands would
+touch: confidence is inclusive of 1.0, so `partially_supported` at 1.0 would
+equal `supported` at 0.0 exactly, tie the default threshold, and be SHOWN. A
+partially supported claim displayed as fully supported is the precise failure
+this project exists to prevent. Spacing by 2 leaves a gap of 1 between bands, so
+the ordering is a guarantee rather than a near-miss. Found by an implementer
+running the plan's own test, not by review.
 
 The **label** decides show or abstain. The confidence only orders claims within a
 label.
@@ -179,6 +187,20 @@ question
 Grounding runs between the reader and the verifier, per claim, as
 `proposal.tex` lines 340 to 342 specify.
 
+**`answer()` takes `embed_query`, a callable, not a precomputed vector.** There
+is one reader-produced claim per grounding call and each needs its own query
+embedding, so a single vector cannot serve them all. The caller builds the
+embedder once and passes its bound method, which keeps the model loaded once per
+command rather than once per claim. Loading ColQwen2 costs about 20 seconds and
+2.65 GB, so per-claim loading would make the command unusable and would not fit
+alongside itself.
+
+This is the one place the CLI pays a cost `vvrag ground` does not: the claims
+are unknown until the reader has run, so the page vectors are fetched up front
+rather than conditionally, even when every claim ends up grounding through the
+text path and the vectors go unused. One extra Qdrant round trip per command,
+against two model calls per claim.
+
 ## 9. No streaming, and the distinction that matters
 
 The reader's output is **not** streamed to the user.
@@ -206,12 +228,22 @@ through.
 | provider returns a schema-invalid response | raise after retry; never coerce |
 | reader returns zero claims | `Answer` with no claims, `abstained_overall=True` |
 | a claim grounds to no regions | verify anyway with empty regions; the correct verdict is `insufficient_evidence`, which the rubric already has a label for |
+| grounding raises (`GroundingError`, e.g. no visual vectors and no text match) | caught per claim inside `answer()`; treated as zero regions and verified anyway, same as the row above |
 | API key missing | raise at client construction with the env var named |
 | network failure | raise; do not fall back to an unverified answer |
 
 The third row is deliberate. An ungrounded claim is exactly the case the rubric's
 fourth label exists for, so routing it around the verifier would discard the
 signal the project is trying to measure.
+
+The fourth row is the same argument taken one step further: `ground()` itself
+raises `GroundingError` when the visual path is reachable in principle (there
+are candidate boxes) but no vectors were supplied for it, rather than quietly
+returning no regions. A reader model paraphrases by default, so most claims
+never land verbatim in the text layer, and this is the expected shape of a
+real `vvrag ask` call, not a rare one. One claim raising must not cost every
+other already-verified claim in the answer, so `answer()` catches it per claim
+and lets the rubric's `insufficient_evidence` label carry the signal instead.
 
 ## 11. Testing strategy
 
