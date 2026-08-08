@@ -88,6 +88,23 @@ def planted_vectors(grid, hot_patch, dim=8):
     return page, query
 
 
+def tied_vectors(grid, dim=8):
+    """Page and query vectors that make every image patch equally relevant.
+
+    Every patch shares one vector, identical to the query's own first token,
+    so score_candidate's mean is the same for every line and every block: the
+    top two lines tie inside the margin and snap_to_box must fall back to the
+    block instead of guessing a line the grid cannot distinguish.
+    """
+    rng = np.random.default_rng(7)
+    page = rng.normal(size=(grid.n_vectors, dim))
+    page /= np.linalg.norm(page, axis=1, keepdims=True)
+    query = rng.normal(size=(3, dim))
+    query /= np.linalg.norm(query, axis=1, keepdims=True)
+    page[grid.offset : grid.offset + grid.n_image_patches] = query[0]
+    return page, query
+
+
 def test_an_exact_match_short_circuits_without_touching_vectors():
     """Text wins by default, and the visual path is not even reachable here."""
     regions = ground("grew 42", two_line_page(), page=0)
@@ -101,10 +118,11 @@ def test_force_visual_bypasses_the_text_match():
     text-locatable questions, which is impossible without this."""
     grid = make_grid()
     page_v, query_v = planted_vectors(grid, hot_patch=0)
+    boxes = two_line_page()
 
     regions = ground(
         "grew 42",
-        two_line_page(),
+        boxes,
         page=0,
         page_vectors=page_v,
         query_vectors=query_v,
@@ -114,6 +132,8 @@ def test_force_visual_bypasses_the_text_match():
 
     assert len(regions) == 1
     assert regions[0].modality == "visual"
+    allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
+    assert regions[0].bbox in allowed
 
 
 def test_no_text_match_falls_back_to_the_visual_path():
@@ -157,12 +177,20 @@ def test_the_visual_path_without_vectors_raises():
 
 
 def test_ground_is_deterministic():
+    """Result does not depend on the order candidate boxes arrive in.
+
+    derive.py sorts by (block_no, line_no, word_no) before grouping, so a
+    reversed input list must rank identically. Calling ground() twice with
+    the same list in the same order cannot fail for any nondeterminism this
+    pipeline could produce and would be a tautology.
+    """
     grid = make_grid()
     page_v, query_v = planted_vectors(grid, hot_patch=0)
+    boxes = two_line_page()
     args = dict(page=0, page_vectors=page_v, query_vectors=query_v, grid=grid)
 
-    first = ground("absent phrase", two_line_page(), **args)
-    second = ground("absent phrase", two_line_page(), **args)
+    first = ground("absent phrase", boxes, **args)
+    second = ground("absent phrase", list(reversed(boxes)), **args)
 
     assert [r.bbox for r in first] == [r.bbox for r in second]
 
@@ -182,5 +210,62 @@ def test_a_visual_region_is_always_an_existing_candidate_box():
         grid=grid,
     )
 
+    assert regions[0].resolution == "line"
     allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
     assert regions[0].bbox in allowed
+
+
+def test_a_visual_region_at_block_resolution_is_also_an_existing_candidate_box():
+    """Same invariant as above, pinned on the other live return site.
+
+    A future change that clipped or intersected a rectangle "for safety"
+    would still pass the line-resolution test above but fail here, since a
+    clipped block union is not one of derive.py's candidate boxes.
+    """
+    grid = make_grid()
+    page_v, query_v = tied_vectors(grid)
+    boxes = two_line_page()
+
+    regions = ground(
+        "absent phrase",
+        boxes,
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+
+    assert regions[0].resolution == "block"
+    allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
+    assert regions[0].bbox in allowed
+
+
+def test_a_block_fallback_region_says_so():
+    """A coarse region must be distinguishable from a confident line hit."""
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+    boxes = two_line_page()
+
+    regions = ground(
+        "absent phrase",
+        boxes,
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+    assert regions[0].resolution == "line"
+
+    text_only = ground("grew 42", boxes, page=0)
+    assert text_only[0].resolution is None, "the text path never snaps"
+
+    tied_page_v, tied_query_v = tied_vectors(grid)
+    forced_block = ground(
+        "absent phrase",
+        boxes,
+        page=0,
+        page_vectors=tied_page_v,
+        query_vectors=tied_query_v,
+        grid=grid,
+    )
+    assert forced_block[0].resolution == "block"

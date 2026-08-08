@@ -26,6 +26,12 @@ class GroundedRegion(BaseModel):
     modality: Literal["visual", "text"]
     crop_ref: str | None = None
     text: str | None = None
+    # "block" means the heatmap could not separate the lines inside the winning
+    # block and the region deliberately stayed coarse. Without this a coarse
+    # fallback is indistinguishable from a confident line hit, so the UI cannot
+    # flag it and the eval cannot report stage-1 and stage-2 failures apart.
+    # None for text-path regions, which never go through snap_to_box.
+    resolution: Literal["line", "block"] | None = None
 
     @field_validator("bbox")
     @classmethod

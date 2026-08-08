@@ -77,5 +77,6 @@ def ground(
             score=selection.score,
             modality="visual",
             text=b.text or None,
+            resolution=selection.resolution,
         )
     ]
