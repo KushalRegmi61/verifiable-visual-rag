@@ -51,6 +51,14 @@ class Claim(BaseModel):
     regions: list[GroundedRegion] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     abstained: bool = False
+    # The verifier's rubric label, None until the verifier has run. Optional so
+    # existing consumers are unaffected; see this file's docstring. Kept as the
+    # label rather than reduced to `confidence` alone because the label is what
+    # decides show-or-abstain, and the UI and the eval both need to say WHICH
+    # verdict a claim received, not merely how strong it was.
+    label: (
+        Literal["supported", "partially_supported", "insufficient_evidence", "unsupported"] | None
+    ) = None
 
 
 class Answer(BaseModel):
