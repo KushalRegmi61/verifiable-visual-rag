@@ -45,7 +45,15 @@ are not visible from the code.
 ### 3.1 The patch grid is coarser than the candidate boxes
 
 ColQwen2 gives a 23x32 grid for a portrait page: 736 cells, each 0.0435 by 0.0312
-in normalized page coordinates. Measured against page 3:
+in normalized page coordinates.
+
+The grid is not constant. The indexed corpus already contains a landscape page at
+**34x19, 646 cells**, confirming that geometry must be read from the payload per
+page rather than assumed. Every number below is for the portrait case; a landscape
+page has finer horizontal and coarser vertical resolution, which shifts the
+limits in 3.1 but does not remove them.
+
+Measured against page 3:
 
 | granularity | count | size vs one cell | sharing a patch row |
 | --- | --- | --- | --- |
@@ -150,38 +158,68 @@ the project argues against.
 
 ## 6. Heatmap construction
 
-Per-patch relevance is **contribution attribution**. For each query token, the
-patch that wins its MaxSim maximum receives that token's score. Patch
-contributions therefore sum to the page's own retrieval score, so a region's score
-is the share of the retrieval score that region explains. That is a meaningful
-quantity to show in the UI and to defend in a viva, and it is a decomposition of
-the real ranking objective rather than a quantity invented for display.
+Two per-patch quantities, with different jobs. The split is forced by measurement
+(6.1), not by preference.
+
+**Dense max-sim, `r(p) = max over q of (q . p)`, does the ranking.** Every one of
+the 736 patches receives a score, so candidates can be compared at any
+granularity. Candidates are scored by the **mean** of `r(p)` over the patches they
+cover, not the sum, because the sum is monotone in area and would hand every
+contest to the largest candidate.
+
+**Contribution attribution explains the result.** For each query token, the patch
+winning its MaxSim maximum receives that token's score, so contributions decompose
+the page's own retrieval score and a region's share is the fraction of the ranking
+score it accounts for. This is what the UI shows and what gets defended in a viva
+("this block accounts for 9 of the 19 query tokens"). It is an honest
+decomposition of the real objective rather than a number invented for display.
 
 **Special tokens are excluded before any argmax**, using `grid.offset` and
 `grid.n_image_patches` via the existing `PatchGrid.is_image_token`. A special
 token maps to no page region. Mapping one anyway draws a confident box with no
 causal link to the evidence, the same failure class as the over-covering
-`span_box` fixed in S2. Note that special tokens do score meaningfully in MaxSim,
-so excluding them changes the totals; scores are reported as a share of the
-image-patch contribution, not of the full page score.
+`span_box` fixed in S2.
 
-### 6.1 The scoring rule is chosen by measurement, not by argument
+This is not a theoretical precaution. Measured against indexed pages, **4 to 5 of
+every 19 to 30 query tokens have their maximum on a special token**, so 16 to 26
+percent of the query would map onto a fabricated rectangle if the filter were
+missing. Because those tokens are dropped, region scores are a share of the
+image-patch total, not of the full page score, and the two do not agree.
 
-Contribution attribution is the primary rule. The implementation plan must
-measure it against two named alternatives on the oracle harness of section 8 and
-select by hit rate:
+### 6.1 Why attribution cannot do the ranking
 
-1. **Dense max-sim mass**: `sum over patches in B of max over q of (q . p)`.
-2. **Area-normalized density**: the same, divided by the candidate's area.
+The first draft of this spec made contribution attribution the ranking rule.
+Measurement against indexed pages killed that, and the numbers are the reason the
+two quantities are now split:
 
-Both alternatives address a real weakness of the primary rule. Contribution
-attribution is sparse: at most one patch per query token receives anything, so the
-number of non-zero patches is bounded by the query length, against 736 cells. A
-typical question is far shorter than 736 tokens, so most of the grid is exactly
-zero. That is adequate for ranking 19 blocks and may be too sparse for ranking
-lines inside one block, where the dense rule is the fallback. The plan should
-record the actual query token count on first measurement, since it is not yet
-measured and it decides how sparse the heatmap really is.
+| query | tokens | tokens landing on patches | **distinct patches lit** | share of grid |
+| --- | --- | --- | --- | --- |
+| "What is the abstention threshold?" | 19 | 14 | **4** | 0.54% |
+| "How many patch vectors ... what grid?" | 30 | 26 | **14** | 1.90% |
+
+Realistic questions run 14 to 30 tokens, and even a three-character query embeds
+to 14 because of a fixed prompt prefix. Since at most one patch per query token
+receives anything, and winners collide, **a typical query lights 4 to 14 of 736
+patches**. At most four blocks can score non-zero, and inside a winning block
+nearly every line scores exactly zero, so stage 2 would be picking among ties.
+
+Attribution is therefore an explanation, not a ranking signal. Dense max-sim
+scores all 736 patches and is what stage 1 and stage 2 both rank on.
+
+The plan must still confirm the choice empirically on the oracle harness of
+section 8, selecting by hit rate among:
+
+1. **Dense mean** (the primary): `mean over patches in B of r(p)`.
+2. **Dense sum**: the size-biased variant, as a control that shows the area bias
+   is real rather than assumed.
+3. **Attribution mass**: retained in the comparison to confirm on data that it
+   underperforms, rather than resting on the sparsity argument alone.
+
+Scoring is pure numpy over vectors already in Qdrant, so the whole comparison
+costs no GPU time and no re-embedding. Choosing a scoring rule by argument when it
+can be chosen by measurement is the mistake this repository has already made
+twice, in the retriever quantization and the patch offset. This section is the
+third instance, caught during design rather than after implementation.
 
 Scoring is pure numpy over vectors already stored in Qdrant, so the comparison
 costs no GPU time and no re-embedding. Choosing a scoring rule by argument when it
