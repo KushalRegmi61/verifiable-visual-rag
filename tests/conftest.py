@@ -4,6 +4,18 @@ Built with PyMuPDF at test time so tests assert exact known coordinates
 rather than tolerances, and so no binary files land in git.
 """
 
+import os
+
+# Three test modules now load ColQwen2 sequentially in one pytest process
+# (test_embedder, test_grounding_live, test_known_item_retrieval). Each frees
+# VRAM in teardown, but empty_cache() returns blocks to the caching allocator
+# without defragmenting the driver's address space, so by the third load the
+# 3.63 GiB card has enough free memory in total and not enough contiguous.
+# Expandable segments let the allocator grow and shrink one segment instead of
+# leaving holes. Must be set before torch is imported anywhere, which is why it
+# lives at the top of conftest rather than in a fixture.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 from pathlib import Path
 
 import fitz

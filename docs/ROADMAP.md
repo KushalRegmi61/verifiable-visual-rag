@@ -24,7 +24,7 @@ Every slice exists to make one of those possible, or to measure it.
 | S1 | Skeleton + contracts | uv project, package, frozen contracts, test harness | No | - | Done |
 | S2 | Ingest pipeline | PDF to page images, text-layer boxes, persistence, CLI | No | S1 | Done |
 | S3 | Retrieval index | ColQwen2 embeddings, Qdrant multivector MaxSim | Batch | S2 | Done |
-| S4 | Grounding core | `ground()`: text-span path, then visual snap-to-box | Query | S2, S3 | Not started |
+| S4 | Grounding core | `ground()`: text-span path, then visual snap-to-box | Query | S2, S3 | Done |
 | S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | Yes | S4 | Not started |
 | S6 | Product UI | FastAPI service + Next.js app: answer, regions, abstain badge | Yes | S5 | Not started |
 | S7 | Eval harness | SlideVQA, auto gold boxes, EM/F1 + IoU + confident-wrong, ablation | Yes | S4, S5 | Not started |
@@ -127,7 +127,7 @@ Measured on the target hardware (GTX 1650, 4 GB): 21.4 s per page to embed,
 
 ---
 
-## S4: Grounding core (not started)
+## S4: Grounding core (done)
 
 **Objective.** `ground()` returns the specific region of a page that supports a
 claim.
@@ -138,28 +138,55 @@ as faithful attribution. So the heatmap is used only to **rank candidate boxes
 that already exist in the text layer**. It never draws one. Everything before
 this slice is infrastructure.
 
-- [ ] Brainstorm and write the design spec
-- [ ] Write the implementation plan
-- [ ] Text-span path first: exact substring matched to stored word boxes. Exact
+- [x] Brainstorm and write the design spec
+- [x] Write the implementation plan
+- [x] Text-span path first: exact substring matched to stored word boxes. Exact
       and faithful by construction, and it is the reliability floor. If the
       visual path underperforms, text answers are still grounded correctly.
-- [ ] Query-to-patch similarity matrix, already computed inside MaxSim but not
+- [x] Query-to-patch similarity matrix, already computed inside MaxSim but not
       currently retained
-- [ ] Patch index to page rectangle via the stored `PatchGrid`
-- [ ] Exclude special tokens before any argmax. Skipping this fabricates
+- [x] Patch index to page rectangle via the stored `PatchGrid`
+- [x] Exclude special tokens before any argmax. Skipping this fabricates
       evidence, the same failure class as the over-covering `span_box` fixed
-      in S2.
-- [ ] Rank the candidate boxes by heatmap mass and select one. Select, never
+      in S2. Not precautionary: 4 to 5 of every 19 to 30 query tokens take
+      their maximum on a special token, so 16 to 26 percent of a query would
+      map onto a rectangle with no page region behind it.
+- [x] Rank the candidate boxes by heatmap mass and select one. Select, never
       draw. This is snap-to-box.
-- [ ] `ground()` returns `GroundedRegion` for text and visual evidence
+- [x] Weight patches by the area a candidate covers, not by centre
+      containment. A line is 0.0142 tall against a 0.0312 patch cell, so it
+      contains no patch centre and centre selection would score every line
+      zero while appearing to rank.
+- [x] Scope stage two by `block_no` rather than geometry. A block is the
+      bounding envelope of its words, so a wrap-around paragraph encloses
+      captions belonging to other blocks, which destroys the bounded-error
+      property that is the only reason selection is two-stage.
+- [x] `ground()` returns `GroundedRegion` for text and visual evidence
       uniformly, so the agent and the eval harness treat them the same
-- [ ] Verify a selected region by the text it covers, not by ink. Every
+- [x] Carry the line-or-block resolution on `GroundedRegion`, so a coarse
+      fallback is distinguishable from a confident line hit. Without it the UI
+      cannot flag a coarse region and the eval cannot separate stage-one from
+      stage-two failures.
+- [x] Verify a selected region by the text it covers, not by ink. Every
       candidate already contains ink (435/435 word boxes on one measured page),
       so an ink check passes a random selector. `evidence.covers_text` is the
       assertion; `evidence.has_ink` only proves the transform.
-- [ ] Report a random-candidate baseline next to every grounding number, so a
-      selector that beats nothing cannot look like it works
-- [ ] `vvrag ground "<question>" --overlay`, a picture of the claim working
+- [x] Report a random-candidate baseline next to every grounding number, so a
+      selector that beats nothing cannot look like it works. Measured: the
+      selector hits 50.3 percent against a 5.3 percent random floor, 9.5 times
+      the baseline, over 193 trials.
+- [x] The scoring bake-off contradicted this design's own argument. Attribution
+      mean leads at 0.593 mean IoU against dense mean's 0.483, while lighting 2
+      percent of the grid, which the sparsity argument said should make it the
+      weakest ranker. The default is NOT changed: all 193 trials come from one
+      homogeneous document and S7 evaluates on SlideVQA, so this corpus can
+      retire the argument without installing a replacement. Spec 6.2 and 6.3.
+- [x] Flat line ranking beats two-stage selection on IoU for all three rules,
+      because a wrong block in stage one is unrecoverable and the ambiguity
+      fallback returns block-sized boxes against line-sized gold. Two stages
+      buy bounded error and an honest resolution flag instead. The trade is
+      kept and is now pinned by a test so a reversal surfaces. Spec 7.1.
+- [x] `vvrag ground "<claim>" --overlay`, a picture of the claim working
 
 Needs no new hardware: the embeddings are already in Qdrant and the candidate
 boxes are already in SQLite.

@@ -43,7 +43,7 @@ Two further flags control what gets drawn:
 # --kind: overlay a coarser granularity, derived from the stored word boxes
 uv run vvrag inspect proposal_report/proposal.pdf --page 3 --kind line --overlay lines.png
 
-# --find: draw only the rects covering a phrase — the project's claim, as a picture
+# --find: draw only the rects covering a phrase, the project's claim, as a picture
 uv run vvrag inspect proposal_report/proposal.pdf --page 3 \
     --find "region-level evidence" --overlay found.png
 ```
@@ -95,6 +95,8 @@ export VVRAG_QDRANT_API_KEY=...
 
 uv run vvrag embed --all           # ~21 s/page, resumable
 uv run vvrag search "your question" -k 5
+uv run vvrag ground "<claim>" --doc <sha> --page <n> --overlay out.png
+uv run vvrag ground "<claim>" --doc <sha> --page <n> --force-visual   # what the eval measures
 ```
 
 `embed` is a separate command from `ingest` on purpose. Ingest needs only the
