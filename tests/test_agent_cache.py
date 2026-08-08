@@ -56,3 +56,14 @@ def test_a_different_image_misses(tmp_path):
 
     assert chat.structured("p", one, ClaimList).claims == ["a"]
     assert chat.structured("p", two, ClaimList).claims == ["b"]
+
+
+def test_the_key_is_unambiguous_across_part_boundaries(tmp_path):
+    """A separator-joined key is not injective: ("X\\0Y", "Z") and ("X", "Y\\0Z")
+    would hash the same, so two different calls would share a cache entry and
+    one would silently return the other's answer."""
+    from visual_verify.agent.cache import _digest
+
+    assert _digest("X\x00ClaimList", "Y", None, "ClaimList") != _digest(
+        "X", "ClaimList\x00Y", None, "ClaimList"
+    )
