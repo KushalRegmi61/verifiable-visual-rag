@@ -23,3 +23,14 @@ def test_core_import_pulls_no_store_dependency():
     loaded = _modules_after_importing("visual_verify")
     leaked = [m for m in FORBIDDEN if m in loaded]
     assert not leaked, f"core leaked heavy deps: {leaked}"
+
+
+def test_grounding_pulls_no_store_or_model_dependency():
+    """Grounding must stay usable without Qdrant, torch, or a GPU.
+
+    If this fails, something in grounding/ started fetching its own inputs
+    instead of taking them as arguments.
+    """
+    loaded = _modules_after_importing("visual_verify.grounding")
+    leaked = [m for m in FORBIDDEN if m in loaded]
+    assert not leaked, f"grounding leaked heavy deps: {leaked}"

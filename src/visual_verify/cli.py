@@ -380,6 +380,96 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ground(args: argparse.Namespace) -> int:
+    """Ground a claim to a region of one page.
+
+    This is the adapter: it fetches vectors and geometry so that the grounding
+    package never has to. Everything it hands over is a plain array or a value
+    object, which is what keeps grounding inside the core's four dependencies.
+    """
+    from visual_verify.grounding import ground
+    from visual_verify.retrieval.geometry import PatchGrid
+    from visual_verify.retrieval.index import ORIGINAL
+
+    settings = Settings.from_env()
+    with _session(settings) as session:
+        found = _resolve_document(session, args.doc)
+        if found is None or isinstance(found, list):
+            print(f"no unique document matching {args.doc!r}")
+            return 1
+        doc = found
+        page = session.scalar(
+            select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
+        )
+        if page is None:
+            print(f"no page {args.page} in {Path(doc.path).name}")
+            return 1
+        boxes = [
+            _to_record(b)
+            for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
+        ]
+        image_path = settings.pages_dir / page.image_path
+
+    page_vectors = query_vectors = grid = None
+    # Only pay for the model and the fetch when the visual path can be reached.
+    if args.force_visual or not derive.span_boxes(boxes, args.claim):
+        index = _make_index(settings)
+        if index.count() == 0:
+            print("no pages indexed; run `vvrag embed` first")
+            return 1
+        payload = index.get_payload(doc.sha256, args.page)
+        stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
+        grid = PatchGrid(
+            n_x=payload["n_patches_x"],
+            n_y=payload["n_patches_y"],
+            offset=payload["patch_offset"],
+            n_vectors=stored.shape[0],
+        )
+        page_vectors = stored
+        query_vectors = _make_embedder(settings).embed_query(args.claim)
+
+    # No try/except GroundingError here: vectors are None only when
+    # span_boxes(boxes, args.claim) was truthy and force_visual is not set, in
+    # which case ground() finds the same text match first (force != "visual")
+    # and returns before ever reaching the code path that raises. There is no
+    # input that reaches this call with vectors unset and force="visual".
+    regions = ground(
+        args.claim,
+        boxes,
+        page=args.page,
+        page_vectors=page_vectors,
+        query_vectors=query_vectors,
+        grid=grid,
+        force="visual" if args.force_visual else None,
+    )
+
+    if not regions:
+        print("no evidence for this claim on this page")
+        return 0
+
+    for r in regions:
+        x0, y0, x1, y1 = r.bbox
+        marker = f" [{r.resolution}]" if r.resolution else ""
+        print(
+            f"{r.modality:<6}{marker} score {r.score:7.3f}  "
+            f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]  {(r.text or '')[:60]}"
+        )
+
+    if args.overlay:
+        img = Image.open(image_path).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        for r in regions:
+            x0, y0, x1, y1 = r.bbox
+            draw.rectangle(
+                [x0 * img.width, y0 * img.height, x1 * img.width, y1 * img.height],
+                outline=(226, 10, 22) if r.modality == "visual" else (16, 128, 64),
+                width=3,
+            )
+        img.save(args.overlay)
+        print(f"wrote {args.overlay}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vvrag", description="Verifiable Visual RAG")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -420,6 +510,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("query")
     p_search.add_argument("-k", type=int, default=5, help="how many pages to return")
     p_search.set_defaults(func=cmd_search)
+
+    p_ground = sub.add_parser("ground", help="ground a claim to a region of a page")
+    p_ground.add_argument("claim", help="the claim to find evidence for")
+    p_ground.add_argument("--doc", required=True, help="document sha256, prefix, or path substring")
+    p_ground.add_argument("--page", type=int, required=True)
+    p_ground.add_argument(
+        "--force-visual",
+        action="store_true",
+        help="use snap-to-box even when the claim is in the text layer (what the eval does)",
+    )
+    p_ground.add_argument("--overlay", help="write a PNG with the region drawn on the page")
+    p_ground.set_defaults(func=cmd_ground)
 
     return parser
 

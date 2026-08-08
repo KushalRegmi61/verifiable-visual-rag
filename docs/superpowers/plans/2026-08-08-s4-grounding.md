@@ -8,6 +8,14 @@
 
 **Tech Stack:** numpy, pydantic (`contracts.GroundedRegion`), existing `derive.py`, `evidence.py`, and `retrieval/geometry.py`. No new dependencies.
 
+**Status: executed and merged.** The checkboxes below are left unticked on
+purpose: this is the plan as written, and three of its tasks were wrong in ways
+worth keeping visible. Task 2's attribution test asserted a property the function
+does not have, Task 5 specified block membership geometrically when `block_no` was
+already available, and Task 10's bake-off was posed wrong three times before it
+measured anything. The spec records what was actually built and what the
+measurements said; read that for current truth.
+
 **Spec:** `docs/superpowers/specs/2026-08-08-s4-grounding-design.md`. Read it before starting. The two measured constraints in section 3 are the reason this design looks the way it does.
 
 ---
@@ -260,11 +268,16 @@ from visual_verify.grounding.heatmap import attribution
 
 
 def test_attribution_credits_only_the_winning_patch():
-    """Each query token's score goes to the one vector that won its maximum."""
+    """One query token's score lands on the one patch that won it, and nowhere else.
+
+    Single token on purpose. With several tokens the top-credited patch is not
+    necessarily the best-matching one, because credit accumulates: see
+    test_attribution_sums_credit_across_tokens.
+    """
     grid = make_grid()
     rng = np.random.default_rng(3)
     page = unit(rng.normal(size=(grid.n_vectors, 8)))
-    query = unit(rng.normal(size=(3, 8)))
+    query = unit(rng.normal(size=(1, 8)))
 
     target_patch = 5
     page[grid.offset + target_patch] = query[0]   # exact match, similarity 1.0
@@ -272,8 +285,32 @@ def test_attribution_credits_only_the_winning_patch():
     a = attribution(query, page, grid)
 
     assert a.shape == (grid.n_image_patches,)
+    assert np.count_nonzero(a) == 1
     assert int(a.argmax()) == target_patch
-    assert a[target_patch] >= 1.0
+    assert a[target_patch] == pytest.approx(1.0)
+
+
+def test_attribution_sums_credit_across_tokens():
+    """Credit accumulates per patch rather than overwriting.
+
+    So a patch winning two tokens can outrank a patch winning one perfect
+    token. That is correct for a decomposition of the page score, and it is a
+    second reason this map must not be used to rank candidates: the
+    highest-credited patch is not necessarily the best-matching one.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(7)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    duplicated = unit(rng.normal(size=(8,)))
+    # Two identical query tokens must both take their maximum on the same
+    # patch, so the planted patch is credited twice.
+    query = np.stack([duplicated, duplicated])
+    page[grid.offset + 2] = duplicated
+
+    a = attribution(query, page, grid)
+
+    assert a[2] == pytest.approx(2.0), "credit must accumulate, not overwrite"
+    assert np.count_nonzero(a) == 1
 
 
 def test_attribution_is_sparse():
@@ -348,7 +385,7 @@ def attribution(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `uv run pytest tests/test_heatmap.py -q`
-Expected: PASS, 8 passed
+Expected: PASS, 14 passed (10 from Task 1, plus these 4)
 
 - [ ] **Step 5: Commit**
 
@@ -358,9 +395,12 @@ git commit -m "feat(grounding): add attribution map for explaining a selection
 
 Decomposes the page's own retrieval score, so a region's share is the
 fraction of the ranking it accounts for. Kept out of the ranking path
-deliberately: at most one patch per query token is credited, so a real
-19-token query lights 4 of 736 patches and nearly every line inside a block
-would score zero."
+deliberately, for two independent reasons now pinned by tests. At most one
+patch per query token is credited, so a real 19-token query lights 4 of 736
+patches and nearly every line inside a block scores zero. And credit
+accumulates, so the highest-credited patch is not necessarily the
+best-matching one: two mediocre tokens on one patch outscore a single
+exact match elsewhere."
 ```
 
 ---
@@ -788,18 +828,18 @@ from visual_verify.derive import block_boxes, line_boxes
 # two lines is the expected case, not an anomaly.
 AMBIGUITY_MARGIN = 0.10
 
+# Relevance is a mean of cosine similarities, so scores live in [-1, 1] and a
+# meaningful gap is far above this floor. Without it, a near-zero top score
+# becomes its own denominator and a 1e-19 gap reads as a 10 percent margin:
+# noise promoted to a confident line selection.
+MIN_SCORE_SCALE = 1e-6
+
 
 @dataclass(frozen=True)
 class Selection:
     box: BoxRecord
     score: float
     resolution: Literal["line", "block"]
-
-
-def _contains(outer: BoxRecord, inner: BoxRecord) -> bool:
-    cx = (inner.x0 + inner.x1) / 2
-    cy = (inner.y0 + inner.y1) / 2
-    return outer.x0 <= cx <= outer.x1 and outer.y0 <= cy <= outer.y1
 
 
 def snap_to_box(
@@ -828,7 +868,13 @@ def snap_to_box(
         return None
     best_block, block_score = ranked_blocks[0]
 
-    inside = [ln for ln in line_boxes(boxes) if _contains(best_block, ln)]
+    # Membership by block_no, not geometry. block_boxes builds a block as the
+    # bounding envelope of its words, so a wrap-around paragraph's envelope can
+    # enclose a figure caption belonging to a different block; centre-in-envelope
+    # then feeds stage 2 lines from the wrong paragraph, which is exactly the
+    # bounded-error property two stages exist to provide. derive._union carries
+    # block_no onto every line, so the exact answer is already available.
+    inside = [ln for ln in line_boxes(boxes) if ln.block_no == best_block.block_no]
     ranked_lines = rank_candidates(relevance, grid, inside, reduce)
     if not ranked_lines:
         return Selection(best_block, block_score, "block")
@@ -836,7 +882,7 @@ def snap_to_box(
     top_line, top_score = ranked_lines[0]
     if len(ranked_lines) > 1:
         runner_up = ranked_lines[1][1]
-        denominator = abs(top_score) if top_score else 1.0
+        denominator = max(abs(top_score), MIN_SCORE_SCALE)
         if (top_score - runner_up) / denominator < margin:
             return Selection(best_block, block_score, "block")
     return Selection(top_line, top_score, "line")
