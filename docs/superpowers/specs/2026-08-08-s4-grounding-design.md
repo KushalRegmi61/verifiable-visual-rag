@@ -330,6 +330,33 @@ rather than present two-stage selection as strictly better.
 reverses the ordering surfaces as a failure rather than as an unexamined
 improvement.
 
+### 7.2 Observed: a query-independent sink on a sparse page
+
+Found by looking at an overlay, not by a test. On page 1 of the proposal, a
+front-matter page with little text, `--force-visual` selects the page-number
+"i" in the footer rather than the claim, and it does so for ANY query. Two
+unrelated queries scored that patch 0.3746 and 0.3750, computed by calling
+`dense_relevance` and `snap_to_box` directly with no CLI in the loop. Page 5
+with a distinctive claim resolves to the correct line at 0.677, so the grid,
+the offset, and the query path are all sound.
+
+Near-identical scores across unrelated queries mean the patch is winning on
+something query-independent, which is the signature of an attention sink rather
+than a match.
+
+This is not a defect to fix in S4, and the bake-off bounds how often it happens:
+59.6% hit@0.25 over 193 trials on 71 pages is incompatible with a systematic
+collapse to footers. It is a real instance of the phenomenon the proposal's gap
+argument rests on, that raw similarity heatmaps are fragile and misleading as
+attribution (arXiv saliency citation, AAAI/AIES 2025), and it is worth showing in
+the report as evidence FOR the design rather than hiding as an embarrassment.
+Snap-to-box constrains the damage: the system returned a real text-layer box that
+is honestly wrong, not a fabricated region drawn from a bad heatmap.
+
+S7 should report how often the selected region falls in a page's footer or header
+band, since that is a cheap proxy for this failure and it would otherwise hide
+inside the aggregate IoU.
+
 ## 8. Metrics: two numbers, not one
 
 A single IoU conflates two failure modes with different owners:
