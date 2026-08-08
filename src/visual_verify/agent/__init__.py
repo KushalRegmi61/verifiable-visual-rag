@@ -10,3 +10,7 @@ whole pipeline testable with no network and no API key.
 
 Task 10 adds the public re-exports here. Nothing else belongs in this file.
 """
+
+from visual_verify.agent.core import AgentError, answer
+
+__all__ = ["AgentError", "answer"]
