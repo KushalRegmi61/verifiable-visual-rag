@@ -214,12 +214,22 @@ through.
 | provider returns a schema-invalid response | raise after retry; never coerce |
 | reader returns zero claims | `Answer` with no claims, `abstained_overall=True` |
 | a claim grounds to no regions | verify anyway with empty regions; the correct verdict is `insufficient_evidence`, which the rubric already has a label for |
+| grounding raises (`GroundingError`, e.g. no visual vectors and no text match) | caught per claim inside `answer()`; treated as zero regions and verified anyway, same as the row above |
 | API key missing | raise at client construction with the env var named |
 | network failure | raise; do not fall back to an unverified answer |
 
 The third row is deliberate. An ungrounded claim is exactly the case the rubric's
 fourth label exists for, so routing it around the verifier would discard the
 signal the project is trying to measure.
+
+The fourth row is the same argument taken one step further: `ground()` itself
+raises `GroundingError` when the visual path is reachable in principle (there
+are candidate boxes) but no vectors were supplied for it, rather than quietly
+returning no regions. A reader model paraphrases by default, so most claims
+never land verbatim in the text layer, and this is the expected shape of a
+real `vvrag ask` call, not a rare one. One claim raising must not cost every
+other already-verified claim in the answer, so `answer()` catches it per claim
+and lets the rubric's `insufficient_evidence` label carry the signal instead.
 
 ## 11. Testing strategy
 

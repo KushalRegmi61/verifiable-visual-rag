@@ -54,3 +54,11 @@ def abstention_score(label: str, confidence: float) -> float:
     if not 0.0 <= confidence <= 1.0:
         raise ValueError(f"confidence must be between 0 and 1, got {confidence}")
     return _BAND * _RANK[label] + confidence
+
+
+# The "supported" floor at zero confidence: the default abstention threshold,
+# admitting only fully supported claims. core.py's DEFAULT_THRESHOLD and
+# config.py's Settings.abstain_threshold default both used to repeat this as
+# an independent literal 6.0; deriving it here makes it one source, so a
+# future change to _RANK or _BAND cannot desynchronize the three copies.
+SUPPORTED_FLOOR = abstention_score("supported", 0.0)

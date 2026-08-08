@@ -8,7 +8,11 @@ Everything here takes a StructuredChat as an argument and never constructs one.
 LangChain is imported in exactly one file, models.py, which is what keeps the
 whole pipeline testable with no network and no API key.
 
-Task 10 adds the public re-exports here. Nothing else belongs in this file.
+The different-models check in core.answer() compares `StructuredChat.model_id`,
+the configured provider:model string, not the underlying weights. Two
+differently-named deployments of the same weights would pass the check; it
+catches misconfiguration, not genuine weight identity, so a freshly swapped
+reader should not be over-trusted on the strength of this check alone.
 """
 
 from visual_verify.agent.core import AgentError, answer

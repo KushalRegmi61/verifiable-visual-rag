@@ -200,7 +200,7 @@ def test_ask_result_puts_withheld_claims_in_their_own_section_after_shown(capsys
         abstained_overall=False,
     )
 
-    _print_ask_result(result)
+    _print_ask_result(result, 6.0)
     out = capsys.readouterr().out
 
     withheld_idx = out.index("Withheld")
@@ -223,7 +223,7 @@ def test_ask_result_omits_withheld_section_when_nothing_was_withheld(capsys):
         abstained_overall=False,
     )
 
-    _print_ask_result(result)
+    _print_ask_result(result, 6.0)
     out = capsys.readouterr().out
 
     assert "Withheld" not in out
@@ -239,10 +239,89 @@ def test_ask_result_shows_withheld_section_and_abstention_line_when_all_withheld
         abstained_overall=True,
     )
 
-    _print_ask_result(result)
+    _print_ask_result(result, 6.0)
     out = capsys.readouterr().out
 
     assert "Answer (0 claim(s) shown):" in out
     assert "Withheld (1 claim(s), not part of the answer):" in out
     assert "abstained: no claim on this page met the support threshold" in out
     assert out.index("Withheld") < out.index("abstained: no claim")
+
+
+def test_ask_result_prints_the_threshold_before_the_answer_heading(capsys):
+    """A transcript at --threshold 0 would otherwise be structurally identical
+    to a fully verified run: unsupported claims land under the same "Answer"
+    heading with nothing recording how permissive the gate was.
+    """
+    from visual_verify.cli import _print_ask_result
+    from visual_verify.contracts import Answer, Claim
+
+    result = Answer(
+        question="q",
+        claims=[Claim(text="Fine.", confidence=0.9, abstained=False, label="supported")],
+        abstained_overall=False,
+    )
+
+    _print_ask_result(result, 4.5)
+    out = capsys.readouterr().out
+
+    assert "threshold: 4.5" in out
+    assert out.index("threshold: 4.5") < out.index("Answer (")
+
+
+def test_ask_rejects_a_non_finite_threshold(env, capsys):
+    """--threshold nan makes `score < nan` always False, so every claim would
+    be shown and abstained_overall would be False: the exact transcript this
+    project exists to prevent from looking verified.
+    """
+    assert main(["ask", "q", "--doc", "abc", "--page", "0", "--threshold", "nan"]) == 1
+    assert "finite" in capsys.readouterr().out.lower()
+
+    assert main(["ask", "q", "--doc", "abc", "--page", "0", "--threshold", "inf"]) == 1
+    assert "finite" in capsys.readouterr().out.lower()
+
+
+def test_ask_command_runs_end_to_end_with_cached_fake_models(
+    env, born_digital_pdf, capsys, monkeypatch
+):
+    """Nothing previously called main(["ask", ...]); the only prior coverage
+    was build_parser and _print_ask_result in isolation, which is exactly
+    where the CachedChat(make_chat(...)) -> answer() wiring bug shipped
+    unnoticed. This drives the real cmd_ask body: it fetches the page's
+    vectors the way cmd_ground does, wraps two FakeChat models in CachedChat
+    over one shared cache directory, and answers for real.
+
+    It also pins that the reader's and verifier's caches, which share that one
+    directory, land in two distinct files rather than one overwriting the
+    other. That currently depends entirely on model_id staying part of the
+    cache key and nothing was exercising it end to end.
+    """
+    import visual_verify.agent.models as models_module
+    from visual_verify.agent.schemas import ClaimList, Verdict
+    from visual_verify.agent.types import FakeChat
+
+    assert main(["ingest", str(born_digital_pdf)]) == 0
+    capsys.readouterr()
+    assert main(["embed", "--all"]) == 0
+    capsys.readouterr()
+
+    def fake_make_chat(role, settings):
+        if role == "reader":
+            return FakeChat("openai:fake-reader", [ClaimList(claims=["Revenue grew 42 percent"])])
+        return FakeChat(
+            "google:fake-verifier",
+            [Verdict(label="supported", confidence=0.9, reason="matches the page")],
+        )
+
+    monkeypatch.setattr(models_module, "make_chat", fake_make_chat)
+
+    assert main(["ask", "What happened to revenue?", "--doc", "born_digital", "--page", "0"]) == 0
+    out = capsys.readouterr().out
+
+    assert "Revenue grew 42 percent" in out
+    assert "supported" in out.lower()
+    assert "Answer (1 claim(s) shown):" in out
+
+    settings = Settings.from_env()
+    cached = list(settings.agent_cache_dir.glob("*.json"))
+    assert len(cached) == 2, "reader and verifier share one cache dir but must not collide"

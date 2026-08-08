@@ -192,3 +192,34 @@ def test_the_same_model_for_both_roles_is_refused():
 
     with pytest.raises(AgentError, match="same model"):
         answer("q", Path("p.png"), page_boxes(), page=0, reader_chat=same, verifier_chat=other)
+
+
+def test_a_claim_that_cannot_be_grounded_does_not_abort_the_whole_answer():
+    """A reader paraphrases by default, so a claim not findable verbatim in
+    the text layer, with no visual vectors supplied (the CLI's default state
+    before this fix), is the EXPECTED case, not a rare one. ground() raises
+    GroundingError for exactly that input; answer() must treat it as zero
+    regions for this claim and keep verifying the rest, not lose every
+    already-verified claim to one unlucky one.
+    """
+    reader = FakeChat(
+        "r",
+        [ClaimList(claims=["Revenue grew 42 percent", "The paraphrase is nowhere on this page"])],
+    )
+    verifier = FakeChat(
+        "v",
+        [
+            Verdict(label="supported", confidence=0.9, reason="matches"),
+            Verdict(label="insufficient_evidence", confidence=0.6, reason="no region"),
+        ],
+    )
+
+    out = answer(
+        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
+    )
+
+    assert len(out.claims) == 2
+    grounded, ungroundable = out.claims
+    assert len(grounded.regions) == 1
+    assert ungroundable.regions == []
+    assert ungroundable.label == "insufficient_evidence"
