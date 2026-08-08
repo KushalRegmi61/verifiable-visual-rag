@@ -42,3 +42,31 @@ def test_a_noun_phrase_conjunction_is_not_flagged():
     """'X and Y rose' is one assertion about two subjects, not two claims.
     Flagging it would report a decomposition failure that did not happen."""
     assert not is_compound("Revenue and margin both rose.")
+
+
+def test_a_compound_subject_without_filler_word_is_not_flagged():
+    """Same shape as the 'both rose' case with the filler word removed.
+
+    A verb-shortly-after-conjunction check flags this, wrongly: there is no
+    verb before the conjunction, only one shared verb after it, so this is
+    still one assertion with a compound subject."""
+    assert not is_compound("Revenue and margin rose.")
+
+
+def test_a_compound_subject_with_a_widened_verb_is_not_flagged():
+    assert not is_compound("Revenue and expenses both totalled 5 million.")
+
+
+def test_semicolon_joined_clauses_is_flagged():
+    """A semicolon joins two independent clauses the same way 'and' does."""
+    assert is_compound("Revenue grew; margins held steady.")
+
+
+def test_a_multi_word_gap_between_the_joiner_and_the_second_verb_is_flagged():
+    """The old adjacency check missed this; a verb on each side of the
+    joiner, however far apart, is the actual signal for joined clauses."""
+    assert is_compound("Revenue grew and net margins also held steady.")
+
+
+def test_the_widened_verb_vocabulary_catches_report_register():
+    assert is_compound("Revenue improved and expenses declined.")

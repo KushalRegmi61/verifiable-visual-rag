@@ -59,6 +59,11 @@ class Claim(BaseModel):
     label: (
         Literal["supported", "partially_supported", "insufficient_evidence", "unsupported"] | None
     ) = None
+    # Flagged by the reader's conjunction check: this claim appears to assert
+    # more than one thing, so its single region can only evidence part of it.
+    # Advisory, never a reason to drop the claim, because discarding it would
+    # lose an answer. The eval counts these as decomposition failures.
+    compound: bool = False
 
 
 class Answer(BaseModel):

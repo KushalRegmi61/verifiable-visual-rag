@@ -156,6 +156,33 @@ def test_all_claims_abstained_means_abstained_overall():
     assert out.abstained_overall is True
 
 
+def test_a_compound_claim_is_flagged_but_still_shown_and_verified():
+    """The reader's conjunction check must actually reach the pipeline. A
+    compound claim is advisory information for the eval, never a reason to
+    drop or reject the claim: dropping it would lose an answer."""
+    boxes = [
+        word(0.1 + i * 0.15, 0.10, 0.22 + i * 0.15, 0.16, t, i)
+        for i, t in enumerate(["Revenue", "grew", "and", "margins", "fell"])
+    ]
+    reader = FakeChat("r", [ClaimList(claims=["Revenue grew and margins fell"])])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    out = answer(
+        "What happened?",
+        Path("p.png"),
+        boxes,
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+    )
+
+    assert len(out.claims) == 1
+    claim = out.claims[0]
+    assert claim.compound is True
+    assert claim.abstained is False
+    assert len(claim.regions) == 1
+
+
 def test_the_same_model_for_both_roles_is_refused():
     """The separate-judge requirement is the reason this slice exists. A
     misconfiguration pointing both roles at one model would otherwise be

@@ -25,13 +25,19 @@ evidence. A claim asserting two things cannot be evidenced by one region.
 
 Question: {question}"""
 
-# A clause-joining conjunction: " and " followed by something with its own verb.
-# Deliberately conservative. "Revenue and margin both rose" is ONE assertion
-# about two subjects, and flagging it would report a decomposition failure that
-# did not happen.
-_COMPOUND = re.compile(
-    r"\b(?:and|but|while|whereas)\b\s+\w+\s+"
-    r"(?:is|are|was|were|has|have|had|grew|fell|rose|held|remained|increased|decreased)\b",
+# A joiner that MIGHT be stitching two clauses together: a conjunction or a
+# semicolon. Matching the joiner alone says nothing; "Revenue and margin rose"
+# has one too and is a single assertion with a compound subject.
+_JOINER = re.compile(r"\b(?:and|but|while|whereas)\b|;", re.IGNORECASE)
+
+# A verb, widened past the original 13-word list to cover ordinary report
+# register: totals, positions, and trend language ("stood at", "posted",
+# "indicates", "shows", "improved", "declined", "climbed", "dropped",
+# "rising", "falling") in addition to the original set.
+_VERB = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|grew|fell|rose|held|remained|increased|decreased|"
+    r"totalled|totaled|stood|posted|indicates|indicated|shows|showed|improved|declined|"
+    r"climbed|dropped|rising|falling|gained|lost|reached|expanded|contracted)\b",
     re.IGNORECASE,
 )
 
@@ -43,8 +49,30 @@ def is_compound(claim: str) -> bool:
     sentence asserting two things is not grounded to one region. Flagged, not
     rejected: dropping the claim would lose an answer, and the useful response
     is to surface it in the eval as a decomposition failure.
+
+    The test is structural, not "is there a verb near a conjunction": a
+    compound SUBJECT ("Revenue and margin rose") has no verb before the
+    joiner, only after, and is one assertion. Joined CLAUSES ("Revenue grew
+    and margins held steady") have a verb on both sides of the joiner,
+    however many words sit between the joiner and either verb, and are two
+    assertions. So this flags only when a verb from `_VERB` appears both
+    before and after the first joiner (a conjunction or a semicolon).
+
+    This is a heuristic, not a parser, and it is honest about what it misses:
+    it only ever looks at the FIRST joiner, so a claim with a compound
+    subject followed by a genuinely joined clause later in the sentence can
+    still slip through. It only recognizes the verbs listed in `_VERB`, so a
+    joined clause using a verb outside that list is not caught. It has no
+    notion of comma splices, "however", "therefore", or any joiner other than
+    the conjunctions and the semicolon above. Expect it to catch the common
+    joined-clause shapes and to stay quiet on compound subjects; do not read
+    "not flagged" as "verified atomic."
     """
-    return bool(_COMPOUND.search(claim))
+    match = _JOINER.search(claim)
+    if not match:
+        return False
+    before, after = claim[: match.start()], claim[match.end() :]
+    return bool(_VERB.search(before) and _VERB.search(after))
 
 
 def read(chat: StructuredChat, image_path: Path, question: str) -> list[str]:

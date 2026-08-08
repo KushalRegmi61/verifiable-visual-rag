@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from visual_verify.agent.reader import read
+from visual_verify.agent.reader import is_compound, read
 from visual_verify.agent.rubric import abstention_score
 from visual_verify.agent.types import StructuredChat
 from visual_verify.agent.verifier import verify
@@ -76,6 +76,7 @@ def answer(
                 confidence=verdict.confidence,
                 label=verdict.label,
                 abstained=score < threshold,
+                compound=is_compound(text),
             )
         )
 
