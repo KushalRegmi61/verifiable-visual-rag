@@ -260,11 +260,16 @@ from visual_verify.grounding.heatmap import attribution
 
 
 def test_attribution_credits_only_the_winning_patch():
-    """Each query token's score goes to the one vector that won its maximum."""
+    """One query token's score lands on the one patch that won it, and nowhere else.
+
+    Single token on purpose. With several tokens the top-credited patch is not
+    necessarily the best-matching one, because credit accumulates: see
+    test_attribution_sums_credit_across_tokens.
+    """
     grid = make_grid()
     rng = np.random.default_rng(3)
     page = unit(rng.normal(size=(grid.n_vectors, 8)))
-    query = unit(rng.normal(size=(3, 8)))
+    query = unit(rng.normal(size=(1, 8)))
 
     target_patch = 5
     page[grid.offset + target_patch] = query[0]   # exact match, similarity 1.0
@@ -272,8 +277,32 @@ def test_attribution_credits_only_the_winning_patch():
     a = attribution(query, page, grid)
 
     assert a.shape == (grid.n_image_patches,)
+    assert np.count_nonzero(a) == 1
     assert int(a.argmax()) == target_patch
-    assert a[target_patch] >= 1.0
+    assert a[target_patch] == pytest.approx(1.0)
+
+
+def test_attribution_sums_credit_across_tokens():
+    """Credit accumulates per patch rather than overwriting.
+
+    So a patch winning two tokens can outrank a patch winning one perfect
+    token. That is correct for a decomposition of the page score, and it is a
+    second reason this map must not be used to rank candidates: the
+    highest-credited patch is not necessarily the best-matching one.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(7)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    duplicated = unit(rng.normal(size=(8,)))
+    # Two identical query tokens must both take their maximum on the same
+    # patch, so the planted patch is credited twice.
+    query = np.stack([duplicated, duplicated])
+    page[grid.offset + 2] = duplicated
+
+    a = attribution(query, page, grid)
+
+    assert a[2] == pytest.approx(2.0), "credit must accumulate, not overwrite"
+    assert np.count_nonzero(a) == 1
 
 
 def test_attribution_is_sparse():
@@ -348,7 +377,7 @@ def attribution(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `uv run pytest tests/test_heatmap.py -q`
-Expected: PASS, 8 passed
+Expected: PASS, 14 passed (10 from Task 1, plus these 4)
 
 - [ ] **Step 5: Commit**
 
@@ -358,9 +387,12 @@ git commit -m "feat(grounding): add attribution map for explaining a selection
 
 Decomposes the page's own retrieval score, so a region's share is the
 fraction of the ranking it accounts for. Kept out of the ranking path
-deliberately: at most one patch per query token is credited, so a real
-19-token query lights 4 of 736 patches and nearly every line inside a block
-would score zero."
+deliberately, for two independent reasons now pinned by tests. At most one
+patch per query token is credited, so a real 19-token query lights 4 of 736
+patches and nearly every line inside a block scores zero. And credit
+accumulates, so the highest-credited patch is not necessarily the
+best-matching one: two mediocre tokens on one patch outscore a single
+exact match elsewhere."
 ```
 
 ---
