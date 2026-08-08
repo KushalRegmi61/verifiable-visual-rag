@@ -76,3 +76,26 @@ def dense_relevance(
     _validate(query_vectors, page_vectors, grid)
     sim = np.asarray(query_vectors, dtype=np.float64) @ np.asarray(page_vectors, dtype=np.float64).T
     return sim[:, _image_slice(grid)].max(axis=0)
+
+
+def attribution(query_vectors: np.ndarray, page_vectors: np.ndarray, grid: PatchGrid) -> np.ndarray:
+    """Per-patch share of the page's MaxSim score. For EXPLANATION, not ranking.
+
+    Each query token's maximum is taken over ALL vectors, exactly as MaxSim
+    does, and the winning vector receives that token's score. Tokens won by
+    special tokens credit nothing, which is correct: they point at no region.
+
+    Because those tokens are dropped, the total here is a share of the
+    image-patch contribution and will NOT equal the full page MaxSim score.
+
+    Do not rank with this. See the module docstring and spec section 6.1.
+    """
+    _validate(query_vectors, page_vectors, grid)
+    sim = np.asarray(query_vectors, dtype=np.float64) @ np.asarray(page_vectors, dtype=np.float64).T
+    winners = sim.argmax(axis=1)
+    out = np.zeros(grid.n_image_patches, dtype=np.float64)
+    lo, hi = grid.offset, grid.offset + grid.n_image_patches
+    for token, winner in enumerate(winners):
+        if lo <= winner < hi:
+            out[winner - lo] += sim[token, winner]
+    return out

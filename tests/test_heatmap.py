@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from visual_verify.grounding.heatmap import dense_relevance
+from visual_verify.grounding.heatmap import attribution, dense_relevance
 from visual_verify.retrieval.geometry import PatchGrid
 
 
@@ -144,3 +144,81 @@ def test_dense_relevance_rejects_an_empty_query():
 
     with pytest.raises(ValueError, match="2-D"):
         dense_relevance(query, page, grid)
+
+
+def test_attribution_credits_only_the_winning_patch():
+    """One query token's score lands on the one patch that won it, and nowhere else.
+
+    Single token on purpose. With several tokens the top-credited patch is not
+    necessarily the best-matching one, because credit accumulates: see
+    test_attribution_sums_credit_across_tokens.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(3)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(1, 8)))
+
+    target_patch = 5
+    page[grid.offset + target_patch] = query[0]  # exact match, similarity 1.0
+
+    a = attribution(query, page, grid)
+
+    assert a.shape == (grid.n_image_patches,)
+    assert np.count_nonzero(a) == 1
+    assert int(a.argmax()) == target_patch
+    assert a[target_patch] == pytest.approx(1.0)
+
+
+def test_attribution_sums_credit_across_tokens():
+    """Credit accumulates per patch rather than overwriting.
+
+    So a patch winning two tokens can outrank a patch winning one perfect
+    token. That is correct for a decomposition of the page score, and it is a
+    second reason this map must not be used to rank candidates: the
+    highest-credited patch is not necessarily the best-matching one.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(7)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    duplicated = unit(rng.normal(size=(8,)))
+    # Two identical query tokens must both take their maximum on the same
+    # patch, so the planted patch is credited twice.
+    query = np.stack([duplicated, duplicated])
+    page[grid.offset + 2] = duplicated
+
+    a = attribution(query, page, grid)
+
+    assert a[2] == pytest.approx(2.0), "credit must accumulate, not overwrite"
+    assert np.count_nonzero(a) == 1
+
+
+def test_attribution_is_sparse():
+    """At most one patch per query token can be credited.
+
+    This is why attribution cannot rank: a real 19-token query lights 4 of 736
+    patches, so nearly every line inside a block would score exactly 0 and
+    stage 2 would be breaking ties at random.
+    """
+    grid = make_grid(n_x=8, n_y=8, offset=2)
+    rng = np.random.default_rng(4)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(3, 8)))
+
+    a = attribution(query, page, grid)
+
+    assert np.count_nonzero(a) <= query.shape[0]
+    assert np.count_nonzero(a) < grid.n_image_patches
+
+
+def test_attribution_drops_tokens_won_by_special_tokens():
+    """A token whose maximum is a prefix vector credits no patch at all."""
+    grid = make_grid()
+    rng = np.random.default_rng(5)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(2, 8)))
+
+    page[0] = query[0]  # prefix token wins query token 0 outright
+    a = attribution(query, page, grid)
+
+    # Only query token 1 can have credited anything.
+    assert np.count_nonzero(a) <= 1
