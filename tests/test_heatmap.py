@@ -195,9 +195,12 @@ def test_attribution_sums_credit_across_tokens():
 def test_attribution_is_sparse():
     """At most one patch per query token can be credited.
 
-    This is why attribution cannot rank: a real 19-token query lights 4 of 736
-    patches, so nearly every line inside a block would score exactly 0 and
-    stage 2 would be breaking ties at random.
+    A real 19-token query lights 4 of 736 patches, 0.5-2% of the grid. This
+    was originally read as disqualifying attribution from ranking, but the
+    bake-off measured the opposite: over 193 trials attribution reached a
+    mean IoU of 0.593 against dense mean's 0.483, so the sparsity documented
+    here appears to denoise rather than to erase (spec sections 6.2, 6.3).
+    This test only pins the sparsity fact, not any conclusion drawn from it.
     """
     grid = make_grid(n_x=8, n_y=8, offset=2)
     rng = np.random.default_rng(4)

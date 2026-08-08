@@ -9,8 +9,17 @@ preference. See spec section 6.1.
                     token's score, so contributions decompose the page's own
                     retrieval score. Measured on real pages, a 14-30 token query
                     lights only 4-14 distinct patches out of 736, which is
-                    0.5-2% of the grid. That is far too sparse to rank lines
-                    inside a block, where nearly every candidate would score 0.
+                    0.5-2% of the grid.
+
+That sparsity was originally read as disqualifying: too few lit patches to
+rank lines inside a block, where nearly every candidate would score 0. The
+bake-off measured the opposite. Over 193 trials, attribution reached a mean
+IoU of 0.593 against dense mean's 0.483, so sparsity appears to denoise rather
+than to erase: a handful of high-precision patches outranks a diffuse mean
+over hundreds of patches most of which are irrelevant to the query. dense_mean
+remains the default only because every trial in that measurement came from one
+homogeneous document; see spec sections 6.2 and 6.3 for the correction and the
+caveat.
 
 BOTH maps exclude special tokens. Measured: 4-5 of every 19-30 query tokens
 take their maximum on a special token, so 16-26% of a query would map onto a
@@ -101,10 +110,15 @@ def attribution(query_vectors: np.ndarray, page_vectors: np.ndarray, grid: Patch
     Because those tokens are dropped, the total here is a share of the
     image-patch contribution and will NOT equal the full page MaxSim score.
 
-    Do not rank with this; rank with dense_relevance. That is a documented
-    rule rather than an enforced one on purpose: the scoring bake-off ranks
-    with this map deliberately, as the control that shows it underperforms,
-    so a type-level barrier would block a measurement the design requires.
+    dense_relevance is still the default ranker, but not because this map
+    underperforms: measured over 193 trials, attribution reached a mean IoU
+    of 0.593 against dense_relevance's 0.483 (see spec sections 6.2, 6.3).
+    dense_relevance stays the default because that measurement came from one
+    homogeneous document, not because sparsity was shown to hurt ranking.
+    Documented as a caller convention rather than enforced by the type system
+    on purpose: the scoring bake-off ranks with this map deliberately, to
+    measure it against dense_relevance, so a type-level barrier here would
+    block the measurement itself.
     """
     _validate(query_vectors, page_vectors, grid)
     sim = _similarity(query_vectors, page_vectors)
