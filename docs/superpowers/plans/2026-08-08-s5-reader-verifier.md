@@ -157,7 +157,7 @@ Create `src/visual_verify/agent/rubric.py`:
 Labels are fixed by proposal.tex line 377 and are part of the deliverable.
 Do not rename, reorder the public tuple, or add a fifth.
 
-WHY THE SCORE IS label_rank + confidence, and not either alone:
+WHY THE SCORE IS 2 * label_rank + confidence, and not either alone:
 
 The label decides whether a claim is shown. Confidence only orders claims
 WITHIN a label, so a confident "partially supported" can never outrank a
@@ -180,15 +180,23 @@ Label = Literal[
     "unsupported",
 ]
 
-# Ranks are spaced by 1 and confidence is bounded to [0, 1], so a label's band
-# can never reach the next label's floor. That is what makes the ordering above
-# a guarantee rather than a tendency.
+# Ranks are spaced by _BAND=2 while confidence spans a width of 1, so each
+# label occupies a band of width 1 with a gap of 1 before the next: [0,1],
+# [2,3], [4,5], [6,7]. Spacing of 1 would NOT work: confidence is inclusive
+# of 1.0, so partially_supported at 1.0 would equal supported at 0.0 exactly,
+# and a partially supported claim would tie the supported floor and be SHOWN.
+# That is the precise failure this project exists to prevent, which is why
+# the separation must be a gap and not a touching boundary.
 _RANK: dict[str, int] = {
     "supported": 3,
     "partially_supported": 2,
     "insufficient_evidence": 1,
     "unsupported": 0,
 }
+
+# Multiplier that turns the ranks above into non-touching bands. See the
+# comment on _RANK before changing it.
+_BAND = 2
 
 LABELS: tuple[str, ...] = tuple(_RANK)
 
@@ -199,7 +207,7 @@ def abstention_score(label: str, confidence: float) -> float:
         raise ValueError(f"unknown label {label!r}; expected one of {sorted(_RANK)}")
     if not 0.0 <= confidence <= 1.0:
         raise ValueError(f"confidence must be between 0 and 1, got {confidence}")
-    return _RANK[label] + confidence
+    return _BAND * _RANK[label] + confidence
 ```
 
 - [ ] **Step 5: Run to verify it passes**
@@ -730,7 +738,7 @@ In `src/visual_verify/config.py`, add to the `Settings` dataclass fields:
     reader_model: str = "gpt-4o"
     verifier_provider: str = "google"
     verifier_model: str = "gemini-2.0-flash"
-    abstain_threshold: float = 3.0
+    abstain_threshold: float = 6.0
 ```
 
 and to `from_env()`:
@@ -740,7 +748,7 @@ and to `from_env()`:
             reader_model=os.getenv("VVRAG_READER_MODEL", "gpt-4o"),
             verifier_provider=os.getenv("VVRAG_VERIFIER_PROVIDER", "google"),
             verifier_model=os.getenv("VVRAG_VERIFIER_MODEL", "gemini-2.0-flash"),
-            abstain_threshold=float(os.getenv("VVRAG_ABSTAIN_THRESHOLD", "3.0")),
+            abstain_threshold=float(os.getenv("VVRAG_ABSTAIN_THRESHOLD", "6.0")),
 ```
 
 and a property alongside `pages_dir`:
@@ -751,8 +759,9 @@ and a property alongside `pages_dir`:
         return self.data_dir / "agent_cache"
 ```
 
-The default threshold of 3.0 is the `supported` floor: with ranks spaced by 1
-and confidence in [0, 1], only a `supported` claim can reach it.
+The default threshold of 6.0 is the `supported` floor: ranks are spaced by 2
+against a confidence width of 1, so the bands are [0,1], [2,3], [4,5], [6,7]
+and only a `supported` claim reaches 6.0.
 
 - [ ] **Step 3: Write the failing test**
 
@@ -779,9 +788,10 @@ def test_settings_read_both_roles_from_env(monkeypatch):
 
 
 def test_the_default_threshold_is_the_supported_floor():
-    """Ranks are spaced by 1 and confidence is in [0, 1], so 3.0 admits only
-    'supported'. A lower default would show partially-supported claims by
-    accident."""
+    """Bands are [0,1], [2,3], [4,5], [6,7], so 6.0 admits only 'supported'.
+
+    Spacing of 1 would let partially_supported at confidence 1.0 tie the
+    supported floor exactly and be shown."""
     from visual_verify.agent.rubric import abstention_score
 
     s = Settings()
@@ -1344,7 +1354,7 @@ def test_lowering_the_threshold_admits_a_partially_supported_claim():
     reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
     verifier = FakeChat("v", [Verdict(label="partially_supported", confidence=0.5, reason="half")])
 
-    out = answer("q", Path("p.png"), page_boxes(), page=0, threshold=2.0,
+    out = answer("q", Path("p.png"), page_boxes(), page=0, threshold=4.0,
                  reader_chat=reader, verifier_chat=verifier)
 
     assert out.claims[0].abstained is False
@@ -1431,9 +1441,9 @@ from visual_verify.grounding import ground
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.retrieval.geometry import PatchGrid
 
-# The 'supported' floor: ranks are spaced by 1 and confidence is in [0, 1], so
-# only a supported claim reaches 3.0.
-DEFAULT_THRESHOLD = 3.0
+# The 'supported' floor. Ranks are spaced by 2 against a confidence width of
+# 1, so the bands do not touch and only a supported claim reaches 6.0.
+DEFAULT_THRESHOLD = 6.0
 
 
 class AgentError(RuntimeError):
@@ -1544,17 +1554,17 @@ def test_ask_command_is_registered():
     assert args.question == "what is X?"
     assert args.doc == "abc"
     assert args.page == 2
-    assert args.threshold == 3.0
+    assert args.threshold == 6.0
 
 
 def test_ask_command_accepts_a_threshold():
     from visual_verify.cli import build_parser
 
     args = build_parser().parse_args(
-        ["ask", "q", "--doc", "abc", "--page", "1", "--threshold", "2.0"]
+        ["ask", "q", "--doc", "abc", "--page", "1", "--threshold", "4.0"]
     )
 
-    assert args.threshold == 2.0
+    assert args.threshold == 4.0
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -1638,8 +1648,8 @@ Register in `build_parser`, before `return parser`:
     p_ask.add_argument(
         "--threshold",
         type=float,
-        default=3.0,
-        help="abstain below this score; 3.0 admits only fully supported claims",
+        default=6.0,
+        help="abstain below this score; 6.0 admits only fully supported claims",
     )
     p_ask.set_defaults(func=cmd_ask)
 ```

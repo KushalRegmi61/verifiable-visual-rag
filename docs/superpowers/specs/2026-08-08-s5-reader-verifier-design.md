@@ -124,13 +124,21 @@ after the fact, and it goes in the eval output.
 ## 6. Abstention
 
 ```
-score = label_rank + confidence
+score = 2 * label_rank + confidence      confidence in [0, 1]
 
-  supported             3 + c
-  partially_supported   2 + c
-  insufficient_evidence 1 + c
-  unsupported           0 + c
+  supported             6 + c    band [6, 7]
+  partially_supported   4 + c    band [4, 5]
+  insufficient_evidence 2 + c    band [2, 3]
+  unsupported           0 + c    band [0, 1]
 ```
+
+**The rank multiplier is load-bearing.** With ranks spaced by 1 the bands would
+touch: confidence is inclusive of 1.0, so `partially_supported` at 1.0 would
+equal `supported` at 0.0 exactly, tie the default threshold, and be SHOWN. A
+partially supported claim displayed as fully supported is the precise failure
+this project exists to prevent. Spacing by 2 leaves a gap of 1 between bands, so
+the ordering is a guarantee rather than a near-miss. Found by an implementer
+running the plan's own test, not by review.
 
 The **label** decides show or abstain. The confidence only orders claims within a
 label.
