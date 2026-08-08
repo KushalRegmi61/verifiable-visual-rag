@@ -97,7 +97,23 @@ uv run vvrag embed --all           # ~21 s/page, resumable
 uv run vvrag search "your question" -k 5
 uv run vvrag ground "<claim>" --doc <sha> --page <n> --overlay out.png
 uv run vvrag ground "<claim>" --doc <sha> --page <n> --force-visual   # what the eval measures
+uv run vvrag ask "<question>" --doc <sha> --page <n>
+uv run vvrag ask "<question>" --doc <sha> --page <n> --threshold 4.0   # admit partial support
 ```
+
+The reader and the verifier must be **different models**. A model grading its own
+output is biased toward it, so the separation is what makes the verification mean
+anything. Two different vendors makes that true by construction:
+
+```bash
+VVRAG_READER_PROVIDER=openai      VVRAG_READER_MODEL=gpt-4o
+VVRAG_VERIFIER_PROVIDER=google    VVRAG_VERIFIER_MODEL=gemini-2.0-flash
+```
+
+`OPENAI_API_KEY` and `GOOGLE_API_KEY` go in `.env`, which is gitignored. Both
+models are sent a page image, so both must be vision-capable. Responses are
+cached under `data/agent_cache`, which lets a demo run offline and is what makes
+a reported number reproducible against a model that may drift.
 
 `embed` is a separate command from `ingest` on purpose. Ingest needs only the
 four core dependencies and no GPU; embedding needs a 2.5 GB torch stack and

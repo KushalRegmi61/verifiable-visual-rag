@@ -25,7 +25,7 @@ Every slice exists to make one of those possible, or to measure it.
 | S2 | Ingest pipeline | PDF to page images, text-layer boxes, persistence, CLI | No | S1 | Done |
 | S3 | Retrieval index | ColQwen2 embeddings, Qdrant multivector MaxSim | Batch | S2 | Done |
 | S4 | Grounding core | `ground()`: text-span path, then visual snap-to-box | Query | S2, S3 | Done |
-| S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | Yes | S4 | Not started |
+| S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | No | S4 | Done |
 | S6 | Product UI | FastAPI service + Next.js app: answer, regions, abstain badge | Yes | S5 | Not started |
 | S7 | Eval harness | SlideVQA, auto gold boxes, EM/F1 + IoU + confident-wrong, ablation | Yes | S4, S5 | Not started |
 
@@ -198,7 +198,7 @@ Open question: which candidate granularity to rank, word or line or block or
 table cell. S2 stores words and derives the rest precisely so this can be
 retuned without re-ingesting.
 
-## S5: Reader and verifier (not started)
+## S5: Reader and verifier (done)
 
 **Objective.** Answer the question, split the answer into atomic claims, have a
 different model judge each claim against its evidence, and abstain when the
@@ -208,23 +208,54 @@ judgement is weak.
 toward it, which is why the verifier must be a different model. The rubric feeds
 a threshold that lets the system say it does not know.
 
-- [ ] Brainstorm and write the design spec
-- [ ] Write the implementation plan
-- [ ] **Decide the compute path** (see the blocker below)
-- [ ] Reader VLM answers from the retrieved page and its grounded regions
-- [ ] Decompose the answer into atomic claims. A sentence asserting two things
+- [x] Brainstorm and write the design spec
+- [x] Write the implementation plan
+- [x] **Decide the compute path** (see the blocker below)
+- [x] Reader VLM answers from the retrieved page and its grounded regions
+- [x] Decompose the answer into atomic claims. A sentence asserting two things
       cannot be grounded to one region.
-- [ ] Verifier VLM, deliberately a different model from the reader
-- [ ] Four-label rubric turning a judgement into a number a threshold can act on
-- [ ] Abstention gate. This is the point of the project: a wrong answer with a
+- [x] Verifier VLM, deliberately a different model from the reader
+- [x] Four-label rubric turning a judgement into a number a threshold can act on
+- [x] Abstention gate. This is the point of the project: a wrong answer with a
       confident box drawn on it is worse than no answer.
-- [ ] `verify()` takes data, an image and boxes, never a client handle
+- [x] `verify()` takes data, an image and boxes, never a client handle
+- [x] The reader is proven live. `gpt-4o` read the proposal cover page and
+      returned its real contents, the project title and all three submitter
+      names, so the model genuinely reads the image rather than producing
+      fluent text about nothing. A schema-valid response cannot tell those
+      apart on its own, which is why this needed a real call.
+- [x] The abstention bands are separated by a gap, not merely ordered. Scores
+      are `2 * rank + confidence`, giving `[0,1] [2,3] [4,5] [6,7]`. With ranks
+      spaced by 1 a partially supported claim at confidence 1.0 tied the
+      supported floor exactly, and the gate admits ties, so it would have been
+      shown as fully supported. Found by an implementer refusing to make a
+      failing test pass.
+- [x] The compound-claim check is wired into the pipeline as `Claim.compound`.
+      It sat unused for five commits, so the requirement that a two-part claim
+      is never grounded to one region was documented and unenforced. Advisory
+      only: flagged, never dropped, because discarding a claim loses an answer.
 
-**Blocker, unresolved.** The design needs two different VLMs. ColQwen2 alone
-takes 2.65 GB of the card's 3.63 GB usable VRAM, and two model-loading processes
-OOM each other. Options: sequential load and unload, a hosted API for the
-verifier, or the campus GPU. This is a decision to settle by measurement the way
-the S3 retriever was, not something to code around.
+**Blocker, resolved by hosting both models on different providers.** The card
+was never going to fit two VLMs: ColQwen2 alone takes 2.65 GB of 3.63 GB usable
+and reaches 3.5 GB under load. `proposal.tex` line 369 already specifies "a
+multimodal model such as Qwen-VL for local execution, or GPT-4o or Gemini
+through an API", so hosting is what the graded document says rather than a
+workaround, and two vendors make the separate-judge requirement true by
+construction instead of by assertion.
+
+Local execution was rejected for a reason beyond speed. Fitting two VLMs here
+needs 4-bit quantization, and S3 measured what that does on this stack:
+known-item top-1 fell from 1.00 to 0.00 with no warning and correctly shaped
+output. Answer accuracy is the ablation's CONTROL variable, so a reader degraded
+by quantization would move the control for a reason unrelated to grounding,
+which is exactly what the ablation exists to rule out.
+
+**Outstanding: the verifier has never run against a real model.** The Google
+key's project reports zero Gemini quota (`limit: 0`, a billing state rather than
+a rate limit), so the two live verifier tests skip. The component that decides
+show-or-abstain is therefore proven only against a scripted fake. Enable billing
+on that project and the tests run as written. Until then, treat any claim about
+verifier behaviour as untested against reality.
 
 ## S6: Product UI (not started)
 
