@@ -404,6 +404,16 @@ def test_patch_rectangles_land_on_the_page_ink(born_digital_pdf, tmp_path):
     # nothing on a page with ink scattered across it.
     assert not has_ink(img, shift(heaviest, dy=0.5))
 
+    # Tie the transform to geometry we know independently of the heatmap.
+    # conftest places both baselines at y=100 and y=140 on a 792-point page,
+    # so all the ink sits in roughly rows 3 to 5 of 32 and the bottom three
+    # quarters are blank. A transposed or offset patch_bbox moves this.
+    heaviest_row = int(np.argmax(ratios)) // grid.n_x
+    assert heaviest_row < grid.n_y // 4, (
+        f"heaviest ink at row {heaviest_row} of {grid.n_y}, but the fixture "
+        "puts both lines of text in the top eighth of the page"
+    )
+
 
 def test_patch_bbox_tiles_the_page_without_gaps_or_overlap():
     grid = make_grid(n_x=4, n_y=3)
