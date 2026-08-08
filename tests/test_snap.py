@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from visual_verify.grounding.snap import patch_weights
+from visual_verify.grounding.snap import patch_weights, rank_candidates, score_candidate
+from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.retrieval.geometry import PatchGrid
 
 
@@ -102,3 +103,87 @@ def test_a_real_line_box_covers_no_patch_centre_but_still_scores():
     assert np.count_nonzero(w) > 0
     assert w.max() == pytest.approx(line_height * grid.n_y, abs=1e-9)
     assert w.max() < 0.5, "a line covers under half a patch row, as measured"
+
+
+def box(x0, y0, x1, y1, text="w", kind="line", block_no=0, line_no=0):
+    return BoxRecord(
+        kind=kind,
+        x0=x0,
+        y0=y0,
+        x1=x1,
+        y1=y1,
+        text=text,
+        block_no=block_no,
+        line_no=line_no,
+        word_no=-1,
+    )
+
+
+def hot_map(grid, hot_index, hot=1.0, cold=0.1):
+    r = np.full(grid.n_image_patches, cold)
+    r[hot_index] = hot
+    return r
+
+
+def test_score_is_the_weighted_mean_over_covered_patches():
+    grid = make_grid()  # 4x4
+    r = hot_map(grid, 9)  # col 1, row 2
+    assert score_candidate(r, grid, (0.25, 0.5, 0.5, 0.75)) == pytest.approx(1.0)
+
+
+def test_mean_does_not_reward_a_larger_box():
+    """Sum is monotone in area and would hand every contest to the page box."""
+    grid = make_grid()
+    r = hot_map(grid, 9)
+
+    tight = score_candidate(r, grid, (0.25, 0.5, 0.5, 0.75))
+    whole = score_candidate(r, grid, (0.0, 0.0, 1.0, 1.0))
+
+    assert tight > whole
+
+
+def test_sum_reduce_is_available_as_a_control():
+    grid = make_grid()
+    r = hot_map(grid, 9)
+
+    tight = score_candidate(r, grid, (0.25, 0.5, 0.5, 0.75), reduce="sum")
+    whole = score_candidate(r, grid, (0.0, 0.0, 1.0, 1.0), reduce="sum")
+
+    assert whole > tight, "sum must show the area bias the bake-off measures"
+
+
+def test_rank_candidates_orders_by_score_descending():
+    grid = make_grid()
+    r = hot_map(grid, 9)
+    cold = box(0.0, 0.0, 0.25, 0.25, text="cold")
+    warm = box(0.25, 0.5, 0.5, 0.75, text="warm")
+
+    ranked = rank_candidates(r, grid, [cold, warm])
+
+    assert [b.text for b, _ in ranked] == ["warm", "cold"]
+    assert ranked[0][1] > ranked[1][1]
+
+
+def test_rank_candidates_is_deterministic_on_ties():
+    """Ties break by input order, never by set or dict iteration."""
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.5)
+    a = box(0.0, 0.0, 0.25, 0.25, text="a")
+    b = box(0.5, 0.5, 0.75, 0.75, text="b")
+
+    first = [t.text for t, _ in rank_candidates(r, grid, [a, b])]
+    second = [t.text for t, _ in rank_candidates(r, grid, [a, b])]
+
+    assert first == second == ["a", "b"]
+
+
+def test_rank_candidates_skips_a_degenerate_box_without_raising():
+    """Derived boxes are trusted, but a zero-area one must not kill the query."""
+    grid = make_grid()
+    r = hot_map(grid, 9)
+    good = box(0.25, 0.5, 0.5, 0.75, text="good")
+    bad = box(0.5, 0.5, 0.5, 0.5, text="bad")
+
+    ranked = rank_candidates(r, grid, [bad, good])
+
+    assert [t.text for t, _ in ranked] == ["good"]

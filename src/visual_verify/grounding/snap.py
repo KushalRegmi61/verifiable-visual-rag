@@ -3,10 +3,15 @@
 Nothing here creates a rectangle. Every box returned came from derive.py.
 """
 
+from typing import Literal
+
 import numpy as np
 
 from visual_verify.contracts import BBox
+from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.retrieval.geometry import PatchGrid
+
+Reduce = Literal["mean", "sum"]
 
 
 def _axis_overlap(n: int, lo: float, hi: float) -> np.ndarray:
@@ -39,3 +44,40 @@ def patch_weights(grid: PatchGrid, bbox: BBox) -> np.ndarray:
     wx = _axis_overlap(grid.n_x, x0, x1)
     wy = _axis_overlap(grid.n_y, y0, y1)
     return np.outer(wy, wx).ravel()
+
+
+def score_candidate(
+    relevance: np.ndarray, grid: PatchGrid, bbox: BBox, reduce: Reduce = "mean"
+) -> float:
+    """Relevance of the patches `bbox` covers, weighted by how much it covers.
+
+    "mean" is the default because "sum" is monotone in area: a box covering the
+    whole page always sums highest, so sum ranking would return the page. "sum"
+    is kept only as the control that demonstrates that bias in the bake-off.
+    """
+    w = patch_weights(grid, bbox)
+    total = float(w.sum())
+    if total == 0.0:
+        return 0.0
+    weighted = float((w * relevance).sum())
+    return weighted if reduce == "sum" else weighted / total
+
+
+def rank_candidates(
+    relevance: np.ndarray,
+    grid: PatchGrid,
+    candidates: list[BoxRecord],
+    reduce: Reduce = "mean",
+) -> list[tuple[BoxRecord, float]]:
+    """Candidates by descending score. Ties break by input order.
+
+    Determinism matters here: the eval harness reruns this and must not see a
+    different region because a set iterated differently.
+    """
+    scored: list[tuple[BoxRecord, float]] = []
+    for c in candidates:
+        if c.x1 <= c.x0 or c.y1 <= c.y0:
+            continue
+        scored.append((c, score_candidate(relevance, grid, (c.x0, c.y0, c.x1, c.y1), reduce)))
+    # sorted() is stable, so equal scores keep their input order.
+    return sorted(scored, key=lambda pair: -pair[1])
