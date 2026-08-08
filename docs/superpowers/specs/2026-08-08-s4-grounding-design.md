@@ -215,6 +215,15 @@ section 8, selecting by hit rate among:
 3. **Attribution mass**: retained in the comparison to confirm on data that it
    underperforms, rather than resting on the sparsity argument alone.
 
+**Measured** (3 pages, each queried with its own longest line, 2026-08-08):
+dense mean 1/3, dense sum 1/3, attribution mean 1/3. The bake-off tied rather
+than separating the three rules on this small a sample; dense mean is kept as
+the default because it never loses to either control and the area-bias and
+sparsity arguments for it are independently measured elsewhere in this section,
+but the sample is too small (only 3 of the scrolled pages had enough word boxes
+to qualify) to call this a clean win and it should be re-run against a larger
+page sample before being treated as conclusive.
+
 Scoring is pure numpy over vectors already in Qdrant, so the whole comparison
 costs no GPU time and no re-embedding. Choosing a scoring rule by argument when it
 can be chosen by measurement is the mistake this repository has already made
