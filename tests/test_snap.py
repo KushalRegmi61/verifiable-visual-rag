@@ -187,3 +187,56 @@ def test_rank_candidates_skips_a_degenerate_box_without_raising():
     ranked = rank_candidates(r, grid, [bad, good])
 
     assert [t.text for t, _ in ranked] == ["good"]
+
+
+def test_a_box_entirely_off_the_page_scores_zero_rather_than_dividing_by_zero():
+    """Reachable, despite passing the degeneracy check.
+
+    A box outside [0,1] has positive area, so patch_weights accepts it, but
+    every cell clips to zero coverage. Without the guard this divides by a
+    zero total and returns nan, which then wins an argmax the way NaN always
+    does.
+    """
+    grid = make_grid()
+    r = hot_map(grid, 9)
+
+    assert score_candidate(r, grid, (1.5, 1.5, 2.0, 2.0)) == 0.0
+    assert score_candidate(r, grid, (1.5, 1.5, 2.0, 2.0), reduce="sum") == 0.0
+
+
+def test_an_off_page_box_is_ranked_last_rather_than_dropped():
+    """Deliberately different from the degenerate case.
+
+    A zero-area box cannot be scored at all, so it is dropped. An off-page box
+    can be scored, and scores zero, so it stays and simply loses. Dropping it
+    too would make a caller's candidate list silently shrink for two unrelated
+    reasons.
+    """
+    grid = make_grid()
+    r = hot_map(grid, 9)
+    good = box(0.25, 0.5, 0.5, 0.75, text="good")
+    off_page = box(1.5, 1.5, 2.0, 2.0, text="off")
+
+    ranked = rank_candidates(r, grid, [off_page, good])
+
+    assert [t.text for t, _ in ranked] == ["good", "off"]
+    assert ranked[1][1] == 0.0
+
+
+def test_rank_candidates_is_deterministic_on_ties_with_more_than_two():
+    """A two-element list is trivially stable; this would catch an unstable sort.
+
+    Two ties (hot patches) interleaved with two distinct scores (cold patches):
+    higher scores must still sort first, and each tied group must keep its
+    input order.
+    """
+    grid = make_grid()
+    r = hot_map(grid, 9)  # patch (col 1, row 2) is hot, everything else cold
+    tied_1 = box(0.25, 0.5, 0.5, 0.75, text="tied_1")  # covers the hot patch
+    loser = box(0.0, 0.0, 0.25, 0.25, text="loser")  # cold patch
+    tied_2 = box(0.25, 0.5, 0.5, 0.75, text="tied_2")  # covers the hot patch, same score
+    other_loser = box(0.75, 0.75, 1.0, 1.0, text="other_loser")  # cold patch
+
+    ranked = rank_candidates(r, grid, [tied_1, loser, tied_2, other_loser])
+
+    assert [t.text for t, _ in ranked] == ["tied_1", "tied_2", "loser", "other_loser"]

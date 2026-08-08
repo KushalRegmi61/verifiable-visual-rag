@@ -77,6 +77,12 @@ def rank_candidates(
     scored: list[tuple[BoxRecord, float]] = []
     for c in candidates:
         if c.x1 <= c.x0 or c.y1 <= c.y0:
+            # Dropped rather than scored: a zero-area box has no patches to
+            # weight, so there is nothing to rank it by. Boxes come from
+            # derive.py and are well-formed by construction, so reaching here
+            # means an upstream bug, not something this caller can act on. An
+            # off-page box is NOT dropped: it can be scored, scores zero, and
+            # simply loses.
             continue
         scored.append((c, score_candidate(relevance, grid, (c.x0, c.y0, c.x1, c.y1), reduce)))
     # sorted() is stable, so equal scores keep their input order.
