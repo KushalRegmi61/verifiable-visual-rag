@@ -251,6 +251,15 @@ that appears to work.
 - [ ] Answer metrics, EM and F1. Accuracy is a control variable here, not the
       quantity being maximized.
 - [ ] Grounding metrics: mean IoU, hit rate at IoU 0.25 and at 0.5
+- [ ] Report every IoU with its oracle ceiling and the random-candidate floor.
+      Granularity caps IoU independently of the selector: a perfect selector
+      reaches only 0.195 at line level against a 3-word gold span, so a bare
+      0.15 reads as failure when it is in fact near-ceiling work.
+- [ ] State in the results chapter that the 0.5 to 0.6 figure in the proposal
+      (line 452) comes from BBox-DocVQA, whose gold regions are page areas
+      rather than 3-word spans, and is therefore not directly comparable.
+      Decided 2026-08-08: the proposal is left unedited and this explanation
+      carries it. See the S4 spec, section 8.1.
 - [ ] The headline metric: confident-wrong rate against coverage. Answering less
       while being wrong less is the win condition.
 - [ ] Three-way ablation, Baseline against Grounded against Verified, isolating

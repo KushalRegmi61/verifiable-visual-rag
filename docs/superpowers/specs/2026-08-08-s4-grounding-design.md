@@ -265,6 +265,30 @@ Hit rate against the random floor is also a cleaner demonstration of pillar 2 th
 IoU is, because it isolates the contribution of the heatmap ranking from the
 choice of candidate granularity.
 
+### 8.1 Decision on the proposal's stated target
+
+**`proposal.tex` is not edited.** Decided 2026-08-08, after considering a
+clarifying sentence and a revision of the numbers.
+
+Line 452's 0.5 to 0.6 target is a cited reference point from BBox-DocVQA
+(arXiv:2512.02660), where gold regions are page areas. This project derives gold
+automatically as the box of the answer string (line 412), which is a 3-word span.
+When the gold box sits inside the predicted box, IoU reduces to the ratio of their
+areas, so a tighter gold definition mechanically produces a lower IoU for
+identically good grounding. 0.195 here and 0.569 there can describe the same
+quality of system.
+
+Nothing in the proposal is false: line 440 already labels those targets as
+indicative reference points that "may differ on SlideVQA". The exposure is
+presentational, and it is handled in the results chapter rather than by amending a
+graded document after the fact.
+
+**The results chapter must therefore state**, wherever visual grounding IoU
+appears: the achieved value, the oracle ceiling for its granularity, the
+random-candidate floor, and one sentence explaining that the 0.5 to 0.6 reference
+comes from a benchmark with larger gold regions and is not directly comparable.
+Omitting the ceiling turns a near-ceiling result into an apparent failure.
+
 ## 9. The core boundary
 
 `ground()` receives `page_vectors`, `query_vectors`, and `grid` as arguments. It
