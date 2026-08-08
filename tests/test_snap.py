@@ -1,9 +1,12 @@
 """Patch-to-candidate weighting and two-stage selection."""
 
+import fitz
 import numpy as np
 import pytest
+from PIL import Image
 
 from visual_verify.derive import block_boxes, line_boxes
+from visual_verify.evidence import has_ink, ink_ratio, shift
 from visual_verify.grounding.snap import (
     patch_weights,
     rank_candidates,
@@ -11,6 +14,7 @@ from visual_verify.grounding.snap import (
     snap_to_box,
 )
 from visual_verify.ingest.boxes import BoxRecord
+from visual_verify.ingest.render import render_page
 from visual_verify.retrieval.geometry import PatchGrid
 
 
@@ -376,3 +380,35 @@ def test_single_line_block_resolves_as_line():
 
     assert sel.resolution == "line"
     assert sel.box.text == "solo"
+
+
+def test_patch_rectangles_land_on_the_page_ink(born_digital_pdf, tmp_path):
+    """The heaviest-ink patch must sit on the text, and not next to it.
+
+    Ink presence proves the coordinate transform, nothing more. It cannot
+    prove a selection is correct, because every word box on a real page
+    contains ink. See tests/test_evidence.py.
+    """
+    doc = fitz.open(born_digital_pdf)
+    rendered = render_page(doc[0], tmp_path / "p.png", dpi=150)
+    doc.close()
+
+    grid = PatchGrid(n_x=23, n_y=32, offset=4, n_vectors=4 + 23 * 32 + 7)
+    img = Image.open(rendered.path)
+
+    ratios = [ink_ratio(img, grid.patch_bbox(i)) for i in range(grid.n_image_patches)]
+    heaviest = grid.patch_bbox(int(np.argmax(ratios)))
+
+    assert has_ink(img, heaviest)
+    # Control: the same rect displaced must miss, or the assertion proves
+    # nothing on a page with ink scattered across it.
+    assert not has_ink(img, shift(heaviest, dy=0.5))
+
+
+def test_patch_bbox_tiles_the_page_without_gaps_or_overlap():
+    grid = make_grid(n_x=4, n_y=3)
+    total = sum(
+        (b[2] - b[0]) * (b[3] - b[1])
+        for b in (grid.patch_bbox(i) for i in range(grid.n_image_patches))
+    )
+    assert total == pytest.approx(1.0)
