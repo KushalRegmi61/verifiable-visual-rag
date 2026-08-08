@@ -19,15 +19,20 @@ EXACT = 1.0
 
 
 def text_regions(claim: str, boxes: list[BoxRecord], page: int) -> list[GroundedRegion]:
-    """Regions covering `claim` verbatim, or [] if it is not on the page.
+    """Regions covering `claim` verbatim, or [] if it is not matched on the page.
 
     One region per line the match spans, never a single union. A union over a
     match that wraps across a line break encloses every word in between: on the
     two-line fixture it covers 5.7x the true ink area. span_boxes already
     splits correctly; this function must not re-join.
+
+    An empty result is not proof the claim is absent from the page: a ligature
+    or a hyphenated line break in the text layer can defeat exact matching even
+    when the text is there, so `[]` means "not matched", not "absent". Separately,
+    when the phrase occurs more than once on the page, only the first occurrence
+    in reading order is returned and that ambiguity is not signalled in the
+    result. See derive.span_boxes for both caveats in full.
     """
-    if not boxes:
-        return []
     return [
         GroundedRegion(
             page=page,

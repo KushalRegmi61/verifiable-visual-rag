@@ -1,5 +1,7 @@
 """The text path, and ground() routing."""
 
+import pytest
+
 from visual_verify.grounding.text_span import text_regions
 from visual_verify.ingest.boxes import BoxRecord
 
@@ -48,12 +50,17 @@ def test_a_wrapped_phrase_returns_one_rect_per_line_not_a_union():
 
     On this fixture that is 5.7x the true ink area. The grounding layer must
     pass derive.span_boxes's split through untouched.
+
+    Checking only the rect count and that each is short is not enough: a bug
+    that returned the whole first line and the whole second line (instead of
+    just the matched words within them) would also produce two short rects.
+    The fixture has known coordinates, so pin the exact matched-word geometry.
     """
     regions = text_regions("percent Margins", two_line_page(), page=0)
 
     assert len(regions) == 2
-    for r in regions:
-        assert r.bbox[3] - r.bbox[1] < 0.10, "a rect spanning both lines is a union"
+    assert regions[0].bbox == pytest.approx((0.55, 0.10, 0.67, 0.16))
+    assert regions[1].bbox == pytest.approx((0.10, 0.30, 0.22, 0.36))
 
 
 def test_text_regions_score_is_exact():
