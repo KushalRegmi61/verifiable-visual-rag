@@ -139,3 +139,110 @@ def test_ground_command_accepts_force_visual_and_overlay():
 
     assert args.force_visual is True
     assert args.overlay == "o.png"
+
+
+def test_ask_command_is_registered():
+    from visual_verify.cli import build_parser
+
+    args = build_parser().parse_args(["ask", "what is X?", "--doc", "abc", "--page", "2"])
+
+    assert args.question == "what is X?"
+    assert args.doc == "abc"
+    assert args.page == 2
+    assert args.threshold == 6.0
+
+
+def test_ask_command_accepts_a_threshold():
+    from visual_verify.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["ask", "q", "--doc", "abc", "--page", "1", "--threshold", "4.0"]
+    )
+
+    assert args.threshold == 4.0
+
+
+def test_ask_result_puts_withheld_claims_in_their_own_section_after_shown(capsys):
+    """Pins the structural split the coordinator asked for: a withheld claim's
+    text must never appear before the "Withheld" heading, because that heading
+    is what tells a reader the claim was not part of the answer rather than
+    simply not produced.
+    """
+    from visual_verify.cli import _print_ask_result
+    from visual_verify.contracts import Answer, Claim, GroundedRegion
+
+    result = Answer(
+        question="q",
+        claims=[
+            Claim(
+                text="Revenue grew 42 percent in Q3.",
+                confidence=0.91,
+                abstained=False,
+                label="supported",
+                regions=[
+                    GroundedRegion(
+                        page=0, bbox=(0.181, 0.141, 0.408, 0.155), score=1.0, modality="text"
+                    )
+                ],
+            ),
+            Claim(
+                text="The company acquired a competitor.",
+                confidence=0.79,
+                abstained=True,
+                label="unsupported",
+                regions=[
+                    GroundedRegion(
+                        page=0, bbox=(0.258, 0.169, 0.848, 0.183), score=1.0, modality="visual"
+                    )
+                ],
+            ),
+        ],
+        abstained_overall=False,
+    )
+
+    _print_ask_result(result)
+    out = capsys.readouterr().out
+
+    withheld_idx = out.index("Withheld")
+    shown_text_idx = out.index("Revenue grew 42 percent in Q3.")
+    withheld_text_idx = out.index("The company acquired a competitor.")
+
+    assert shown_text_idx < withheld_idx
+    assert withheld_idx < withheld_text_idx
+    assert "Answer (1 claim(s) shown):" in out
+    assert "Withheld (1 claim(s), not part of the answer):" in out
+
+
+def test_ask_result_omits_withheld_section_when_nothing_was_withheld(capsys):
+    from visual_verify.cli import _print_ask_result
+    from visual_verify.contracts import Answer, Claim
+
+    result = Answer(
+        question="q",
+        claims=[Claim(text="Fine.", confidence=0.9, abstained=False, label="supported")],
+        abstained_overall=False,
+    )
+
+    _print_ask_result(result)
+    out = capsys.readouterr().out
+
+    assert "Withheld" not in out
+
+
+def test_ask_result_shows_withheld_section_and_abstention_line_when_all_withheld(capsys):
+    from visual_verify.cli import _print_ask_result
+    from visual_verify.contracts import Answer, Claim
+
+    result = Answer(
+        question="q",
+        claims=[Claim(text="Not supported.", confidence=0.2, abstained=True, label="unsupported")],
+        abstained_overall=True,
+    )
+
+    _print_ask_result(result)
+    out = capsys.readouterr().out
+
+    assert "Answer (0 claim(s) shown):" in out
+    assert "Withheld (1 claim(s), not part of the answer):" in out
+    assert "abstained: no claim on this page met the support threshold" in out
+    assert out.index("Withheld") < out.index("abstained: no claim")

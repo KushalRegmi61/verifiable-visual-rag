@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from visual_verify import derive
 from visual_verify.config import Settings
+from visual_verify.contracts import Answer, Claim
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError
 from visual_verify.ingest.pipeline import ingest_pdf
@@ -470,6 +471,96 @@ def cmd_ground(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_claim(c: Claim, indent: str) -> None:
+    flag = " [compound]" if c.compound else ""
+    print(f"{indent}{c.label:<22} {c.confidence:.2f}  {c.text}{flag}")
+    for r in c.regions:
+        x0, y0, x1, y1 = r.bbox
+        box = f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]"
+        print(f"{indent}                      {r.modality:<6} {box}")
+
+
+def _print_ask_result(result: Answer) -> None:
+    """Print an Answer as two labelled sections: shown, then withheld.
+
+    This is a diagnostic view for inspecting the verifier's behaviour from a
+    terminal, not the product answer surface: S6's UI must read
+    `Answer.shown` and never touch `result.claims` directly, because iterating
+    `claims` puts a claim the verifier refused in front of a user. Here the
+    opposite is deliberate: a CLI whose entire purpose is showing how
+    abstention works would be useless if it hid abstained claims, because
+    there would be no way to distinguish "the reader never proposed this" from
+    "the reader proposed it and the verifier said no". The withheld claims are
+    still printed, just under a heading that says outright they are not part
+    of the answer, because "withheld" names a choice the system made, not data
+    that went missing.
+    """
+    shown = result.shown
+    withheld = [c for c in result.claims if c.abstained]
+
+    print(f"Answer ({len(shown)} claim(s) shown):")
+    for c in shown:
+        _print_claim(c, indent="  ")
+
+    if withheld:
+        print(f"\nWithheld ({len(withheld)} claim(s), not part of the answer):")
+        for c in withheld:
+            _print_claim(c, indent="  ")
+
+    if result.abstained_overall:
+        print("\nabstained: no claim on this page met the support threshold")
+
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Answer a question from one page, with every claim verified before it shows."""
+    from visual_verify.agent import AgentError, answer
+    from visual_verify.agent.cache import CachedChat
+    from visual_verify.agent.models import MissingApiKey, UnknownProvider, make_chat
+
+    settings = Settings.from_env()
+    with _session(settings) as session:
+        found = _resolve_document(session, args.doc)
+        if found is None or isinstance(found, list):
+            print(f"no unique document matching {args.doc!r}")
+            return 1
+        doc = found
+        page = session.scalar(
+            select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
+        )
+        if page is None:
+            print(f"no page {args.page} in {Path(doc.path).name}")
+            return 1
+        boxes = [
+            _to_record(b)
+            for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
+        ]
+        image_path = settings.pages_dir / page.image_path
+
+    try:
+        reader = CachedChat(make_chat("reader", settings), settings.agent_cache_dir)
+        verifier = CachedChat(make_chat("verifier", settings), settings.agent_cache_dir)
+    except (MissingApiKey, UnknownProvider) as exc:
+        print(f"cannot build the models: {exc}")
+        return 1
+
+    try:
+        result = answer(
+            args.question,
+            image_path,
+            boxes,
+            page=args.page,
+            reader_chat=reader,
+            verifier_chat=verifier,
+            threshold=args.threshold,
+        )
+    except AgentError as exc:
+        print(f"cannot answer: {exc}")
+        return 1
+
+    _print_ask_result(result)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vvrag", description="Verifiable Visual RAG")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -522,6 +613,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ground.add_argument("--overlay", help="write a PNG with the region drawn on the page")
     p_ground.set_defaults(func=cmd_ground)
+
+    p_ask = sub.add_parser("ask", help="answer a question from a page, with verification")
+    p_ask.add_argument("question")
+    p_ask.add_argument("--doc", required=True, help="document sha256, prefix, or path substring")
+    p_ask.add_argument("--page", type=int, required=True)
+    p_ask.add_argument(
+        "--threshold",
+        type=float,
+        default=6.0,
+        help="abstain below this score; 6.0 admits only fully supported claims",
+    )
+    p_ask.set_defaults(func=cmd_ask)
 
     return parser
 
