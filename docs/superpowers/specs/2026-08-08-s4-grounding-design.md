@@ -1,7 +1,7 @@
 # S4: Grounding Core
 
 Date: 2026-08-08
-Status: design approved, not implemented
+Status: implemented and merged. See docs/superpowers/plans/2026-08-08-s4-grounding.md
 Depends on: S2 (candidate boxes), S3 (page embeddings, patch geometry)
 
 ## 1. What this slice delivers
@@ -328,7 +328,10 @@ rather than present two-stage selection as strictly better.
 
 `test_two_stage_trades_iou_for_bounded_error` pins this, so a later change that
 reverses the ordering surfaces as a failure rather than as an unexamined
-improvement.
+improvement. It requires flat to win for at least 2 of the 3 rules, not all 3,
+because the attribution gap (0.617 against 0.593) is narrow enough that a
+different corpus could close it without the finding being wrong. All 3 win on
+this corpus.
 
 ### 7.2 Observed: a query-independent sink on a sparse page
 

@@ -8,6 +8,14 @@
 
 **Tech Stack:** numpy, pydantic (`contracts.GroundedRegion`), existing `derive.py`, `evidence.py`, and `retrieval/geometry.py`. No new dependencies.
 
+**Status: executed and merged.** The checkboxes below are left unticked on
+purpose: this is the plan as written, and three of its tasks were wrong in ways
+worth keeping visible. Task 2's attribution test asserted a property the function
+does not have, Task 5 specified block membership geometrically when `block_no` was
+already available, and Task 10's bake-off was posed wrong three times before it
+measured anything. The spec records what was actually built and what the
+measurements said; read that for current truth.
+
 **Spec:** `docs/superpowers/specs/2026-08-08-s4-grounding-design.md`. Read it before starting. The two measured constraints in section 3 are the reason this design looks the way it does.
 
 ---

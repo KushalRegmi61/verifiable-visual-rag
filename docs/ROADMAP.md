@@ -172,9 +172,12 @@ this slice is infrastructure.
       so an ink check passes a random selector. `evidence.covers_text` is the
       assertion; `evidence.has_ink` only proves the transform.
 - [x] Report a random-candidate baseline next to every grounding number, so a
-      selector that beats nothing cannot look like it works. Measured: the
-      selector hits 50.3 percent against a 5.3 percent random floor, 9.5 times
-      the baseline, over 193 trials.
+      selector that beats nothing cannot look like it works. Measured over 193
+      trials: the selector picks the queried line 50.3 percent of the time
+      against a 5.3 percent random-LINE baseline, 9.5 times the floor. Note
+      this is a different quantity from the random-BLOCK floor in spec section
+      8, which is a mean IoU under 0.01; both are called a floor and they are
+      not comparable.
 - [x] The scoring bake-off contradicted this design's own argument. Attribution
       mean leads at 0.593 mean IoU against dense mean's 0.483, while lighting 2
       percent of the grid, which the sparsity argument said should make it the
