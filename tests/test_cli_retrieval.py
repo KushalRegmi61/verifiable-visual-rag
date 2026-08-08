@@ -43,3 +43,25 @@ def test_search_before_embed_reports_empty(env, born_digital_pdf, capsys):
 def test_embed_requires_a_target(env, capsys):
     assert main(["embed"]) == 1
     assert "give a document" in capsys.readouterr().out.lower()
+
+
+def test_ground_command_is_registered():
+    from visual_verify.cli import build_parser
+
+    args = build_parser().parse_args(["ground", "some claim", "--doc", "abc", "--page", "3"])
+
+    assert args.claim == "some claim"
+    assert args.doc == "abc"
+    assert args.page == 3
+    assert args.force_visual is False
+
+
+def test_ground_command_accepts_force_visual_and_overlay():
+    from visual_verify.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["ground", "c", "--doc", "abc", "--page", "1", "--force-visual", "--overlay", "o.png"]
+    )
+
+    assert args.force_visual is True
+    assert args.overlay == "o.png"
