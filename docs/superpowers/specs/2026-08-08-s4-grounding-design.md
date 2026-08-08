@@ -158,8 +158,13 @@ the project argues against.
 
 ## 6. Heatmap construction
 
-Two per-patch quantities, with different jobs. The split is forced by measurement
-(6.1), not by preference.
+Two per-patch quantities, with different jobs.
+
+Read 6.1 through 6.4 before treating the assignment of jobs as settled. The
+sparsity measurement in 6.1 is solid; the conclusion drawn from it, that
+attribution cannot rank, was contradicted by the bake-off in 6.2. Dense mean
+remains the default for the reason given in 6.3, which is the narrowness of the
+corpus, not the strength of the argument.
 
 **Dense max-sim, `r(p) = max over q of (q . p)`, does the ranking.** Every one of
 the 736 patches receives a score, so candidates can be compared at any
@@ -186,7 +191,7 @@ percent of the query would map onto a fabricated rectangle if the filter were
 missing. Because those tokens are dropped, region scores are a share of the
 image-patch total, not of the full page score, and the two do not agree.
 
-### 6.1 Why attribution cannot do the ranking
+### 6.1 The sparsity argument, and why it was wrong
 
 The first draft of this spec made contribution attribution the ranking rule.
 Measurement against indexed pages killed that, and the numbers are the reason the
@@ -203,37 +208,80 @@ receives anything, and winners collide, **a typical query lights 4 to 14 of 736
 patches**. At most four blocks can score non-zero, and inside a winning block
 nearly every line scores exactly zero, so stage 2 would be picking among ties.
 
-Attribution is therefore an explanation, not a ranking signal. Dense max-sim
-scores all 736 patches and is what stage 1 and stage 2 both rank on.
+From that, this spec argued attribution could not rank: with nearly every
+candidate scoring zero, stage 2 would be breaking ties at random while appearing
+to rank. Dense max-sim scores all 736 patches, so it became the default.
 
-The plan must still confirm the choice empirically on the oracle harness of
-section 8, selecting by hit rate among:
+**That argument did not survive measurement.** It is kept above, unedited,
+because the reasoning is the point of this section.
 
-1. **Dense mean** (the primary): `mean over patches in B of r(p)`.
-2. **Dense sum**: the size-biased variant, as a control that shows the area bias
-   is real rather than assumed.
-3. **Attribution mass**: retained in the comparison to confirm on data that it
-   underperforms, rather than resting on the sparsity argument alone.
+### 6.2 The bake-off, and what it actually showed
 
-**Measured** (3 pages, each queried with its own longest line, 2026-08-08):
-dense mean 1/3, dense sum 1/3, attribution mean 1/3. The bake-off tied rather
-than separating the three rules on this small a sample; dense mean is kept as
-the default because it never loses to either control and the area-bias and
-sparsity arguments for it are independently measured elsewhere in this section,
-but the sample is too small (only 3 of the scrolled pages had enough word boxes
-to qualify) to call this a clean win and it should be re-run against a larger
-page sample before being treated as conclusive.
+Measured 2026-08-08. 71 of 74 indexed pages qualified with at least 40 word
+boxes, three lines sampled at random per page from lines of at least 8 words,
+seed 0, giving 193 (page, line) trials. Scored by IoU against the sampled line's
+own box, on the two-stage `snap_to_box` path, which is what production runs.
 
-Scoring is pure numpy over vectors already in Qdrant, so the whole comparison
-costs no GPU time and no re-embedding. Choosing a scoring rule by argument when it
-can be chosen by measurement is the mistake this repository has already made
-twice, in the retriever quantization and the patch offset. This section is the
-third instance, caught during design rather than after implementation.
+| rule | mean IoU | hit@0.25 | mean words selected |
+| --- | --- | --- | --- |
+| dense mean | 0.483 | 50.8% | 13.2 |
+| dense sum | 0.500 | 50.8% | 22.4 |
+| **attribution mean** | **0.593** | **59.6%** | 12.9 |
 
-Scoring is pure numpy over vectors already stored in Qdrant, so the comparison
-costs no GPU time and no re-embedding. Choosing a scoring rule by argument when it
-can be chosen by measurement is the mistake this repository has already made
-twice, in the retriever quantization and the patch offset.
+Gold lines average 13.5 words.
+
+**Attribution leads, and not by over-selecting.** It tracks gold length more
+closely than dense mean does, while lighting 2.02% of the grid on average. The
+sparsity argument predicted it should be the weakest ranker and it is the
+strongest. A plausible reason, unverified: sparsity acts as a denoiser. Dense
+relevance gives every patch a moderate value, smearing candidate means together,
+while attribution zeroes everything that did not win a query token, so the few
+informative patches stand out. Ties do not break randomly, because a candidate
+either contains a winning patch or does not.
+
+The area bias against dense sum is real and visible: it selects regions
+averaging 22.4 words against a 13.5-word gold. It simply does not cost enough
+IoU on this corpus to lose.
+
+### 6.3 Why the default is not being changed
+
+**Dense mean stays the default despite losing.** This is a deliberate call, not
+an oversight.
+
+All 193 trials come from one document: this project's own proposal, a
+homogeneous single-column text-heavy A4 report. S7 evaluates on SlideVQA, which
+is landscape slides with sparse text and heavy figures. Choosing a scoring rule
+from n=1 document fits the design to the only corpus that happens to be indexed.
+
+So the measurement is strong enough to retire the argument in 6.1 and not strong
+enough to install a replacement. **S7 must re-run this bake-off on SlideVQA
+before the default is fixed**, and should treat attribution mean as the leading
+candidate going in.
+
+### 6.4 Three ways this measurement was posed wrong first
+
+Recorded because each error produced a confident number, and the direction of
+every one of them favoured the conclusion already believed.
+
+1. **Three pages.** A three-way tie at 1/3 each, separating nothing. The cost
+   here is a one-off model load, not per-page work: queries embed fast and page
+   vectors are already stored, so the small sample saved almost nothing.
+2. **Queried with each page's longest lines.** Sum prefers large candidates, so
+   the gold answer was drawn from exactly where sum's bias pays. Sum won 124 of
+   193, measuring the sampling rather than the rule.
+3. **Scored by text containment.** `covers_text` asks whether the gold text sits
+   inside the selected region, so a larger region contains more and the metric
+   pays for over-selecting. Dense sum won while returning boxes two-thirds
+   longer than the answer. IoU penalises both misses and over-covering, which is
+   why the proposal specifies it (line 434).
+
+Choosing by argument when it can be chosen by measurement is the mistake this
+repository already made twice, in the retriever quantization and the patch
+offset. Measuring badly three times, in the direction of the expected answer, is
+the same mistake wearing numbers.
+
+Scoring is pure numpy over vectors already stored in Qdrant, so re-running the
+comparison costs one model load and no re-embedding.
 
 ## 7. Two-stage snap
 
@@ -252,6 +300,35 @@ Two stages, rather than ranking all 61 lines flat, because the ceiling is the sa
 (0.195) while the error is bounded. A stage-2 mistake still lands inside the
 correct paragraph, whereas a flat miss can land anywhere on the page. The stages
 also fail differently and can be reported separately, which section 8 uses.
+
+### 7.1 Two stages cost accuracy. Measured.
+
+The bake-off in 6.2 scored flat line ranking alongside the two-stage path, and
+flat wins for every rule:
+
+| rule | flat mean IoU | two-stage mean IoU |
+| --- | --- | --- |
+| dense mean | 0.570 | 0.483 |
+| dense sum | 0.720 | 0.500 |
+| attribution mean | 0.617 | 0.593 |
+
+Two reasons, both structural. A wrong block in stage 1 cannot be recovered in
+stage 2, so bounded error is also a bounded ceiling. And the ambiguity rule
+returns block-sized boxes against a line-sized gold, which is exactly the
+granularity penalty 3.2 describes, applied selectively to the cases the heatmap
+found hardest.
+
+**The trade is kept, and it is a trade, not a free win.** What two stages buy is
+that a miss stays inside the right paragraph and that the region declares its own
+resolution, so a coarse answer is visibly coarse rather than silently wrong. A
+flat ranking scores better and can place a confident line box anywhere on the
+page. For a project whose claim is verifiable evidence rather than maximised
+overlap, that is the right side of the trade, but the report must state the cost
+rather than present two-stage selection as strictly better.
+
+`test_two_stage_trades_iou_for_bounded_error` pins this, so a later change that
+reverses the ordering surfaces as a failure rather than as an unexamined
+improvement.
 
 ## 8. Metrics: two numbers, not one
 
