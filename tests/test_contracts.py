@@ -99,3 +99,13 @@ def test_answer_shown_excludes_abstained_claims():
 
     assert [c.text for c in a.shown] == ["kept"]
     assert len(a.claims) == 2, "the rejected claim must still be present for the eval"
+
+
+def test_answer_shown_excludes_a_claim_that_never_reached_the_verifier():
+    """`label` defaults to None and `abstained` defaults to False, so a Claim
+    built by hand (or by anything other than answer()) and never judged would
+    otherwise read as shown. Absence of a verdict is not a passing verdict.
+    """
+    a = Answer(claims=[Claim(text="unverified", confidence=0.5)], question="q")
+
+    assert a.shown == []

@@ -85,8 +85,13 @@ class Answer(BaseModel):
         withholding that is the entire point of the system. The guarantee would
         otherwise rest on every consumer remembering a boolean. This exists so
         the safe path is also the shortest one.
+
+        Requires `label is not None` as well as `not abstained`: a `Claim` that
+        never reached the verifier defaults to `abstained=False`, which would
+        otherwise read as passing. Absence of a verdict is not a passing
+        verdict, so an unverified claim is never shown.
         """
-        return [c for c in self.claims if not c.abstained]
+        return [c for c in self.claims if c.label is not None and not c.abstained]
 
 
 class RetrievedPage(BaseModel):
