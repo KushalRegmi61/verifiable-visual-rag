@@ -51,3 +51,25 @@ def test_qdrant_api_key_from_env(monkeypatch):
 def test_qdrant_api_key_defaults_to_none(monkeypatch):
     monkeypatch.delenv("VVRAG_QDRANT_API_KEY", raising=False)
     assert Settings.from_env().qdrant_api_key is None
+
+
+def test_abstain_threshold_defaults_to_the_rubrics_supported_floor(monkeypatch):
+    from visual_verify.agent.rubric import SUPPORTED_FLOOR
+
+    monkeypatch.delenv("VVRAG_ABSTAIN_THRESHOLD", raising=False)
+    assert Settings.from_env().abstain_threshold == SUPPORTED_FLOOR
+
+
+def test_env_overrides_abstain_threshold(monkeypatch):
+    """VVRAG_ABSTAIN_THRESHOLD was read into Settings but nothing consumed it;
+    a user setting it got no effect and no warning. cmd_ask's --threshold
+    default is built from this setting, so this pins the value that flows
+    into an unflagged `vvrag ask`.
+    """
+    monkeypatch.setenv("VVRAG_ABSTAIN_THRESHOLD", "4.0")
+    assert Settings.from_env().abstain_threshold == 4.0
+
+    from visual_verify.cli import build_parser
+
+    args = build_parser().parse_args(["ask", "q", "--doc", "abc", "--page", "1"])
+    assert args.threshold == 4.0

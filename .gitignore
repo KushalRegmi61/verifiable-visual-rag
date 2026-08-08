@@ -236,3 +236,6 @@ emblem.png
 
 # Raw prior Claude Code transcript (~11 MB), kept locally for context recovery only.
 notes/
+
+# local .env backups, may contain secrets
+.env.bak.*

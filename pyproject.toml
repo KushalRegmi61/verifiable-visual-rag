@@ -28,6 +28,15 @@ retrieval = [
     # colpali-engine nor accelerate pulls this in transitively.
     "bitsandbytes>=0.43",
 ]
+# Hosted reader and verifier. Deliberately NOT pinned like retrieval: these are
+# API clients, not weights, so a version bump changes the request format at
+# worst and cannot silently degrade model quality the way the colpali-engine
+# and transformers combination did.
+agent = [
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-google-genai>=2.0",
+]
 
 [project.scripts]
 vvrag = "visual_verify.cli:main"

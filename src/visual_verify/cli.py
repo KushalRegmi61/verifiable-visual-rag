@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from visual_verify import derive
 from visual_verify.config import Settings
+from visual_verify.contracts import Answer, Claim
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError
 from visual_verify.ingest.pipeline import ingest_pdf
@@ -470,52 +471,76 @@ def cmd_ground(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_reader():
-    """Reader from environment: VVRAG_READER_BACKEND in {hosted, local}.
+def _print_claim(c: Claim, indent: str) -> None:
+    flag = " [compound]" if c.compound else ""
+    print(f"{indent}{c.label:<22} {c.confidence:.2f}  {c.text}{flag}")
+    for r in c.regions:
+        x0, y0, x1, y1 = r.bbox
+        box = f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]"
+        print(f"{indent}                      {r.modality:<6} {box}")
 
-    hosted needs VVRAG_READER_URL (OpenAI-style chat-completions endpoint)
-    and optionally VVRAG_READER_KEY. local needs a GPU and the retrieval
-    extra; the model id defaults to the recorded pairing.
+
+def _print_ask_result(result: Answer, threshold: float) -> None:
+    """Print an Answer as two labelled sections: shown, then withheld.
+
+    This is a diagnostic view for inspecting the verifier's behaviour from a
+    terminal, not the product answer surface: S6's UI must read
+    `Answer.shown` and never touch `result.claims` directly, because iterating
+    `claims` puts a claim the verifier refused in front of a user. Here the
+    opposite is deliberate: a CLI whose entire purpose is showing how
+    abstention works would be useless if it hid abstained claims, because
+    there would be no way to distinguish "the reader never proposed this" from
+    "the reader proposed it and the verifier said no". The withheld claims are
+    still printed, just under a heading that says outright they are not part
+    of the answer, because "withheld" names a choice the system made, not data
+    that went missing.
+
+    `threshold` is printed so a saved transcript states the bar claims were
+    judged against. Without it, a run at --threshold 0 looks structurally
+    identical to a fully verified run: unsupported claims sit under the same
+    "Answer" heading with no marker of how permissive the gate was.
     """
-    from visual_verify.verify.backends import HostedAPIReader, LocalVLMReader
+    shown = result.shown
+    withheld = [c for c in result.claims if c.abstained]
 
-    backend = os.environ.get("VVRAG_READER_BACKEND", "hosted")
-    if backend == "hosted":
-        url = os.environ.get("VVRAG_READER_URL")
-        if not url:
-            raise ValueError("VVRAG_READER_URL is required for the hosted reader")
-        return HostedAPIReader(url=url, key=os.environ.get("VVRAG_READER_KEY"))
-    if backend == "local":
-        return LocalVLMReader()
-    raise ValueError(f"VVRAG_READER_BACKEND must be 'hosted' or 'local', got {backend!r}")
+    print(f"threshold: {threshold}")
+    print(f"Answer ({len(shown)} claim(s) shown):")
+    for c in shown:
+        _print_claim(c, indent="  ")
 
+    if withheld:
+        print(f"\nWithheld ({len(withheld)} claim(s), not part of the answer):")
+        for c in withheld:
+            _print_claim(c, indent="  ")
 
-def _build_verifier():
-    """Verifier from environment: VVRAG_VERIFIER_BACKEND in {hosted, local}."""
-    from visual_verify.verify.backends import HostedAPIVerifier, LocalVLMVerifier
-
-    backend = os.environ.get("VVRAG_VERIFIER_BACKEND", "local")
-    if backend == "hosted":
-        url = os.environ.get("VVRAG_VERIFIER_URL")
-        if not url:
-            raise ValueError("VVRAG_VERIFIER_URL is required for the hosted verifier")
-        return HostedAPIVerifier(url=url, key=os.environ.get("VVRAG_VERIFIER_KEY"))
-    if backend == "local":
-        return LocalVLMVerifier()
-    raise ValueError(f"VVRAG_VERIFIER_BACKEND must be 'hosted' or 'local', got {backend!r}")
+    if result.abstained_overall:
+        print("\nabstained: no claim on this page met the support threshold")
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    """Ask a question against one page, end to end: read, ground, judge, gate.
+    """Answer a question from one page, with every claim verified before it shows.
 
-    This is the adapter: it fetches the page render, the word boxes, the
-    reconstructed text layer, and the stored vectors, and wires the reader
-    and verifier the environment asks for. verify() itself never fetches.
+    Mirrors cmd_ground's vector-fetching adapter pattern: it fetches the
+    page's stored vectors and grid so answer() and ground() never have to
+    touch Qdrant or a GPU directly. The difference from cmd_ground is that a
+    single claim's query embedding is computed there, once, from the fixed CLI
+    argument, whereas here the reader produces an unknown number of claims at
+    runtime, so answer() takes a bound `embed_query` callable and embeds each
+    claim's text itself as it is produced. The embedder is still constructed
+    exactly once here, up front, so it loads its weights once per command
+    rather than once per claim.
     """
-    from visual_verify.derive import line_boxes
+    import math
+
+    from visual_verify.agent import AgentError, answer
+    from visual_verify.agent.cache import CachedChat
+    from visual_verify.agent.models import MissingApiKey, UnknownProvider, make_chat
     from visual_verify.retrieval.geometry import PatchGrid
     from visual_verify.retrieval.index import ORIGINAL
-    from visual_verify.verify import VerifierError, verify
+
+    if not math.isfinite(args.threshold):
+        print(f"--threshold must be a finite number, got {args.threshold}")
+        return 1
 
     settings = Settings.from_env()
     with _session(settings) as session:
@@ -536,87 +561,56 @@ def cmd_ask(args: argparse.Namespace) -> int:
         ]
         image_path = settings.pages_dir / page.image_path
 
-    image = Image.open(image_path).convert("RGB")
-    text_layer = "\n".join(b.text for b in line_boxes(boxes))
-
-    try:
-        reader = _build_reader()
-        verifier = _build_verifier()
-    except ValueError as exc:
-        print(f"ask: {exc}")
-        return 1
-
-    # The visual path is fetched eagerly: claims only exist after the reader
-    # runs, so ask cannot know in advance whether one will need it, and the
-    # reader model dominates the per-ask cost anyway. S6's service holds the
-    # models in memory at startup; that is where per-request economy belongs.
-    page_vectors = grid = None
-    embed = None
+    # Unlike cmd_ground, the claim text is not known yet (the reader has not
+    # run), so there is no way to check span_boxes first and skip the vector
+    # fetch when the text path will suffice. Vectors are always fetched here;
+    # a claim that grounds through the text path simply never uses them.
     index = _make_index(settings)
-    if index.count() > 0:
-        payload = index.get_payload(doc.sha256, args.page)
-        stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
-        grid = PatchGrid(
-            n_x=payload["n_patches_x"],
-            n_y=payload["n_patches_y"],
-            offset=payload["patch_offset"],
-            n_vectors=stored.shape[0],
-        )
-        page_vectors = stored
-        embedder = _make_embedder(settings)
-        embed = embedder.embed_query
+    if index.count() == 0:
+        print("no pages indexed; run `vvrag embed` first")
+        return 1
+    payload = index.get_payload(doc.sha256, args.page)
+    stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
+    grid = PatchGrid(
+        n_x=payload["n_patches_x"],
+        n_y=payload["n_patches_y"],
+        offset=payload["patch_offset"],
+        n_vectors=stored.shape[0],
+    )
+    page_vectors = stored
+    embedder = _make_embedder(settings)
 
     try:
-        ans = verify(
-            args.question,
-            reader,
-            verifier,
-            page=args.page,
-            image=image,
-            text_layer=text_layer,
-            boxes=boxes,
-            embed=embed,
-            page_vectors=page_vectors,
-            grid=grid,
-            force=args.force_visual,
-            threshold=args.threshold,
-        )
-    except VerifierError as exc:
-        print(f"ask: {exc}")
+        reader = CachedChat(make_chat("reader", settings), settings.agent_cache_dir)
+        verifier = CachedChat(make_chat("verifier", settings), settings.agent_cache_dir)
+    except (MissingApiKey, UnknownProvider) as exc:
+        print(f"cannot build the models: {exc}")
         return 1
 
-    print(f"answer: {ans.question} ->", end="")
-    if not ans.claims:
-        print(" (abstained: reader produced no checkable claims)")
-        return 0
-    for c in ans.claims:
-        if c.abstained:
-            print(f"  [ABSTAINED {c.confidence:.3f}] {c.text!r}")
-        else:
-            print(f"  [judged {c.confidence:.3f}] {c.text!r}")
-        for r in c.regions:
-            x0, y0, x1, y1 = r.bbox
-            marker = f" [{r.resolution}]" if r.resolution else ""
-            print(
-                f"    {r.modality:<6}{marker} score {r.score:7.3f}  "
-                f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]  {(r.text or '')[:60]}"
-            )
-    print(f"abstained_overall: {ans.abstained_overall}")
+    try:
+        result = answer(
+            args.question,
+            image_path,
+            boxes,
+            page=args.page,
+            reader_chat=reader,
+            verifier_chat=verifier,
+            threshold=args.threshold,
+            page_vectors=page_vectors,
+            embed_query=embedder.embed_query,
+            grid=grid,
+        )
+    except AgentError as exc:
+        print(f"cannot answer: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 - a corrupt cache entry or a
+        # provider/network error must print a sentence, not a raw traceback;
+        # AgentError above already covers misconfiguration, this covers
+        # everything else that can surface from the client and cache layers.
+        print(f"cannot answer: {type(exc).__name__}: {exc}")
+        return 1
 
-    if args.overlay:
-        draw = ImageDraw.Draw(image)
-        for c in ans.claims:
-            if c.abstained:
-                continue
-            for r in c.regions:
-                x0, y0, x1, y1 = r.bbox
-                draw.rectangle(
-                    [x0 * image.width, y0 * image.height, x1 * image.width, y1 * image.height],
-                    outline=(226, 10, 22) if r.modality == "visual" else (16, 128, 64),
-                    width=3,
-                )
-        image.save(args.overlay)
-        print(f"wrote {args.overlay}")
+    _print_ask_result(result, args.threshold)
     return 0
 
 
@@ -673,22 +667,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_ground.add_argument("--overlay", help="write a PNG with the region drawn on the page")
     p_ground.set_defaults(func=cmd_ground)
 
-    p_ask = sub.add_parser("ask", help="answer a question against one page, with abstention")
-    p_ask.add_argument("question", help="the question to answer")
+    p_ask = sub.add_parser("ask", help="answer a question from a page, with verification")
+    p_ask.add_argument("question")
     p_ask.add_argument("--doc", required=True, help="document sha256, prefix, or path substring")
     p_ask.add_argument("--page", type=int, required=True)
     p_ask.add_argument(
-        "--force-visual",
-        action="store_true",
-        help="ground every claim with snap-to-box, never the text path",
-    )
-    p_ask.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
-        help="sufficiency score a claim must reach to be answered, not abstained",
+        # Settings.abstain_threshold, not a literal: VVRAG_ABSTAIN_THRESHOLD
+        # must actually change what an unflagged `vvrag ask` uses. Read once
+        # per parser build, which is once per CLI invocation.
+        default=Settings.from_env().abstain_threshold,
+        help="abstain below this score; the rubric's supported floor by default",
     )
-    p_ask.add_argument("--overlay", help="write a PNG with the surviving regions drawn")
     p_ask.set_defaults(func=cmd_ask)
 
     return parser

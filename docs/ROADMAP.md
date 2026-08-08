@@ -25,7 +25,7 @@ Every slice exists to make one of those possible, or to measure it.
 | S2 | Ingest pipeline | PDF to page images, text-layer boxes, persistence, CLI | No | S1 | Done |
 | S3 | Retrieval index | ColQwen2 embeddings, Qdrant multivector MaxSim | Batch | S2 | Done |
 | S4 | Grounding core | `ground()`: text-span path, then visual snap-to-box | Query | S2, S3 | Done |
-| S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | Yes | S4 | Not started |
+| S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | No | S4 | Done |
 | S6 | Product UI | FastAPI service + Next.js app: answer, regions, abstain badge | Yes | S5 | Not started |
 | S7 | Eval harness | SlideVQA, auto gold boxes, EM/F1 + IoU + confident-wrong, ablation | Yes | S4, S5 | Not started |
 
@@ -198,7 +198,7 @@ Open question: which candidate granularity to rank, word or line or block or
 table cell. S2 stores words and derives the rest precisely so this can be
 retuned without re-ingesting.
 
-## S5: Reader and verifier (in progress)
+## S5: Reader and verifier (done)
 
 **Objective.** Answer the question, split the answer into atomic claims, have a
 different model judge each claim against its evidence, and abstain when the
@@ -210,7 +210,7 @@ a threshold that lets the system say it does not know.
 
 - [x] Brainstorm and write the design spec
 - [x] Write the implementation plan
-- [x] **Decide the compute path** (see the blocker below, resolved)
+- [x] **Decide the compute path** (see the blocker below)
 - [x] Reader VLM answers from the retrieved page and its grounded regions
 - [x] Decompose the answer into atomic claims. A sentence asserting two things
       cannot be grounded to one region.
@@ -219,27 +219,50 @@ a threshold that lets the system say it does not know.
 - [x] Abstention gate. This is the point of the project: a wrong answer with a
       confident box drawn on it is worse than no answer.
 - [x] `verify()` takes data, an image and boxes, never a client handle
-- [x] `vvrag ask "<question>" --doc ... --page ...`, the pipeline end to end
-- [x] Measure the local verifier's fit and speed on this card and record the
-      actual default pairing (spec 3.1 and 4; `tests/test_verify_live.py`)
+- [x] The reader is proven live. `gpt-4o` read the proposal cover page and
+      returned its real contents, the project title and all three submitter
+      names, so the model genuinely reads the image rather than producing
+      fluent text about nothing. A schema-valid response cannot tell those
+      apart on its own, which is why this needed a real call.
+- [x] The abstention bands are separated by a gap, not merely ordered. Scores
+      are `2 * rank + confidence`, giving `[0,1] [2,3] [4,5] [6,7]`. With ranks
+      spaced by 1 a partially supported claim at confidence 1.0 tied the
+      supported floor exactly, and the gate admits ties, so it would have been
+      shown as fully supported. Found by an implementer refusing to make a
+      failing test pass.
+- [x] The compound-claim check is wired into the pipeline as `Claim.compound`.
+      It sat unused for five commits, so the requirement that a two-part claim
+      is never grounded to one region was documented and unenforced. Advisory
+      only: flagged, never dropped, because discarding a claim loses an answer.
 
-**Blocker, resolved by measurement.** The design needs two different VLMs, and
-the local card (RTX 4050, 6141 MiB total, ~3.63 GB usable after Windows
-reservation, ColQwen2 alone taking 2.65 GB) cannot hold a 7B model at all. The
-decision, recorded in the S5 design spec sections 3 and 4: reader and verifier
-sit behind protocols with a hosted and a local implementation each; the default
-pairing is a hosted Gemini-family reader plus a local Qwen-family verifier, so
-the independence rule holds across families. The core never constructs a model,
-so the campus-GPU story (both roles local, 7B-class) changes wiring, not code.
+**Blocker, resolved by hosting both models on different providers.** The card
+was never going to fit two VLMs: ColQwen2 alone takes 2.65 GB of 3.63 GB usable
+and reaches 3.5 GB under load. `proposal.tex` line 369 already specifies "a
+multimodal model such as Qwen-VL for local execution, or GPT-4o or Gemini
+through an API", so hosting is what the graded document says rather than a
+workaround, and two vendors make the separate-judge requirement true by
+construction instead of by assertion.
 
-**Measured default pairing (2026-08-08):** verifier = `Qwen/Qwen2-VL-2B-Instruct`
-(no 2B exists in the 2.5 family; that candidate was rejected by measurement).
-fp16 takes 4.2 GB and judges in ~16-20 s; nf4 4-bit takes 1.5 GB. The fp16 build
-cannot coexist with ColQwen2's 2.65 GB, so a process that needs both must load
-them sequentially or use the 4-bit build. An end-to-end ask on this card judged
-a true claim supported at confidence 1.0. The venv needed
-`torch==2.6.0+cu124` installed from the pytorch index: PyPI's Windows torch is
-CPU-only, and the uv lock otherwise resolves to it.
+Local execution was rejected for a reason beyond speed. Fitting two VLMs here
+needs 4-bit quantization, and S3 measured what that does on this stack:
+known-item top-1 fell from 1.00 to 0.00 with no warning and correctly shaped
+output. Answer accuracy is the ablation's CONTROL variable, so a reader degraded
+by quantization would move the control for a reason unrelated to grounding,
+which is exactly what the ablation exists to rule out.
+
+**Outstanding: the verifier has never run against a real model.** The Google
+key's project reports zero Gemini quota (`limit: 0`, a billing state rather than
+a rate limit), so the two live verifier tests skip. The component that decides
+show-or-abstain is therefore proven only against a scripted fake. Enable billing
+on that project and the tests run as written. Until then, treat any claim about
+verifier behaviour as untested against reality.
+
+Measured while a parallel S5 branch existed (merged here 2026-08-08): a real
+local verifier, `Qwen/Qwen2-VL-2B-Instruct`, loaded on this card (fp16 4.2 GB,
+~16-20 s per load) and judged a true claim `supported` at confidence 1.0 in an
+end-to-end run; nf4 4-bit halves the memory. That exercises the judge loop
+against a real model, but not the canonical Gemini verifier, which remains the
+outstanding item above.
 
 ## S6: Product UI (not started)
 
