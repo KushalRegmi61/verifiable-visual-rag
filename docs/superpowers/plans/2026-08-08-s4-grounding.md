@@ -820,18 +820,18 @@ from visual_verify.derive import block_boxes, line_boxes
 # two lines is the expected case, not an anomaly.
 AMBIGUITY_MARGIN = 0.10
 
+# Relevance is a mean of cosine similarities, so scores live in [-1, 1] and a
+# meaningful gap is far above this floor. Without it, a near-zero top score
+# becomes its own denominator and a 1e-19 gap reads as a 10 percent margin:
+# noise promoted to a confident line selection.
+MIN_SCORE_SCALE = 1e-6
+
 
 @dataclass(frozen=True)
 class Selection:
     box: BoxRecord
     score: float
     resolution: Literal["line", "block"]
-
-
-def _contains(outer: BoxRecord, inner: BoxRecord) -> bool:
-    cx = (inner.x0 + inner.x1) / 2
-    cy = (inner.y0 + inner.y1) / 2
-    return outer.x0 <= cx <= outer.x1 and outer.y0 <= cy <= outer.y1
 
 
 def snap_to_box(
@@ -860,7 +860,13 @@ def snap_to_box(
         return None
     best_block, block_score = ranked_blocks[0]
 
-    inside = [ln for ln in line_boxes(boxes) if _contains(best_block, ln)]
+    # Membership by block_no, not geometry. block_boxes builds a block as the
+    # bounding envelope of its words, so a wrap-around paragraph's envelope can
+    # enclose a figure caption belonging to a different block; centre-in-envelope
+    # then feeds stage 2 lines from the wrong paragraph, which is exactly the
+    # bounded-error property two stages exist to provide. derive._union carries
+    # block_no onto every line, so the exact answer is already available.
+    inside = [ln for ln in line_boxes(boxes) if ln.block_no == best_block.block_no]
     ranked_lines = rank_candidates(relevance, grid, inside, reduce)
     if not ranked_lines:
         return Selection(best_block, block_score, "block")
@@ -868,7 +874,7 @@ def snap_to_box(
     top_line, top_score = ranked_lines[0]
     if len(ranked_lines) > 1:
         runner_up = ranked_lines[1][1]
-        denominator = abs(top_score) if top_score else 1.0
+        denominator = max(abs(top_score), MIN_SCORE_SCALE)
         if (top_score - runner_up) / denominator < margin:
             return Selection(best_block, block_score, "block")
     return Selection(top_line, top_score, "line")
