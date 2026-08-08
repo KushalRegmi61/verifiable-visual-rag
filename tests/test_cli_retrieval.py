@@ -1,6 +1,12 @@
 import pytest
+from PIL import Image
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from visual_verify.cli import main
+from visual_verify.config import Settings
+from visual_verify.store.engine import make_engine
+from visual_verify.store.models import Document, Page
 
 
 @pytest.fixture
@@ -54,6 +60,74 @@ def test_ground_command_is_registered():
     assert args.doc == "abc"
     assert args.page == 3
     assert args.force_visual is False
+
+
+def test_ground_command_runs_the_text_path_end_to_end(env, born_digital_pdf, capsys):
+    """Nothing previously called main(["ground", ...]), so cmd_ground's body
+    (overlay drawing, modality/resolution markers) never actually ran. This
+    exercises the text path, which needs no vectors and stays off the GPU.
+    """
+    assert main(["ingest", str(born_digital_pdf)]) == 0
+    capsys.readouterr()
+
+    assert main(["ground", "grew 42", "--doc", "born_digital", "--page", "0"]) == 0
+    out = capsys.readouterr().out
+
+    assert "grew 42" in out
+    assert "text" in out.lower()
+
+
+def test_ground_command_writes_an_overlay_that_differs_from_the_page(
+    env, born_digital_pdf, tmp_path, capsys
+):
+    assert main(["ingest", str(born_digital_pdf)]) == 0
+    capsys.readouterr()
+
+    overlay_path = tmp_path / "overlay.png"
+    assert (
+        main(
+            [
+                "ground",
+                "grew 42",
+                "--doc",
+                "born_digital",
+                "--page",
+                "0",
+                "--overlay",
+                str(overlay_path),
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert f"wrote {overlay_path}" in out
+    assert overlay_path.exists()
+
+    settings = Settings.from_env()
+    with Session(make_engine(settings.db_url)) as session:
+        doc = session.scalars(select(Document)).one()
+        page = session.scalar(select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == 0))
+        source_image_path = settings.pages_dir / page.image_path
+
+    source_bytes = Image.open(source_image_path).convert("RGB").tobytes()
+    overlay_bytes = Image.open(overlay_path).convert("RGB").tobytes()
+
+    assert overlay_bytes != source_bytes
+
+
+def test_ground_before_embed_reports_a_helpful_message(env, born_digital_pdf, capsys):
+    """index.get_payload indexes recs[0] and raises a raw IndexError when the
+    point does not exist. "ingested but forgot to embed" is the most likely
+    first-run mistake, so this must fail the same clean way cmd_search does
+    (a count() == 0 check), not with a traceback.
+    """
+    assert main(["ingest", str(born_digital_pdf)]) == 0
+    capsys.readouterr()
+
+    # No claim in the text layer, so cmd_ground must reach for vectors.
+    assert main(["ground", "not on this page at all", "--doc", "born_digital", "--page", "0"]) == 1
+    out = capsys.readouterr().out.lower()
+    assert "vvrag embed" in out
 
 
 def test_ground_command_accepts_force_visual_and_overlay():

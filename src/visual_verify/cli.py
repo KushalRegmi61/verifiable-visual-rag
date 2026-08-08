@@ -387,7 +387,7 @@ def cmd_ground(args: argparse.Namespace) -> int:
     package never has to. Everything it hands over is a plain array or a value
     object, which is what keeps grounding inside the core's four dependencies.
     """
-    from visual_verify.grounding import GroundingError, ground
+    from visual_verify.grounding import ground
     from visual_verify.retrieval.geometry import PatchGrid
     from visual_verify.retrieval.index import ORIGINAL
 
@@ -414,6 +414,9 @@ def cmd_ground(args: argparse.Namespace) -> int:
     # Only pay for the model and the fetch when the visual path can be reached.
     if args.force_visual or not derive.span_boxes(boxes, args.claim):
         index = _make_index(settings)
+        if index.count() == 0:
+            print("no pages indexed; run `vvrag embed` first")
+            return 1
         payload = index.get_payload(doc.sha256, args.page)
         stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
         grid = PatchGrid(
@@ -425,19 +428,20 @@ def cmd_ground(args: argparse.Namespace) -> int:
         page_vectors = stored
         query_vectors = _make_embedder(settings).embed_query(args.claim)
 
-    try:
-        regions = ground(
-            args.claim,
-            boxes,
-            page=args.page,
-            page_vectors=page_vectors,
-            query_vectors=query_vectors,
-            grid=grid,
-            force="visual" if args.force_visual else None,
-        )
-    except GroundingError as exc:
-        print(f"cannot ground: {exc}")
-        return 1
+    # No try/except GroundingError here: vectors are None only when
+    # span_boxes(boxes, args.claim) was truthy and force_visual is not set, in
+    # which case ground() finds the same text match first (force != "visual")
+    # and returns before ever reaching the code path that raises. There is no
+    # input that reaches this call with vectors unset and force="visual".
+    regions = ground(
+        args.claim,
+        boxes,
+        page=args.page,
+        page_vectors=page_vectors,
+        query_vectors=query_vectors,
+        grid=grid,
+        force="visual" if args.force_visual else None,
+    )
 
     if not regions:
         print("no evidence for this claim on this page")
