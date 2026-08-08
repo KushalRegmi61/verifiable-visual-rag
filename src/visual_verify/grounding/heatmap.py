@@ -65,6 +65,19 @@ def _image_slice(grid: PatchGrid) -> slice:
     return slice(grid.offset, grid.offset + grid.n_image_patches)
 
 
+def _similarity(query_vectors: np.ndarray, page_vectors: np.ndarray) -> np.ndarray:
+    """Query x page similarity, (n_query, n_vectors). Call _validate first.
+
+    float64 on both sides deliberately. Stored vectors are float16 from the
+    GPU, and letting one operand stay float16 while the other is promoted
+    changes scores in the last places, which is enough to reorder two
+    near-tied candidates without anything looking wrong.
+    """
+    return (
+        np.asarray(query_vectors, dtype=np.float64) @ np.asarray(page_vectors, dtype=np.float64).T
+    )
+
+
 def dense_relevance(
     query_vectors: np.ndarray, page_vectors: np.ndarray, grid: PatchGrid
 ) -> np.ndarray:
@@ -74,7 +87,7 @@ def dense_relevance(
     grid.patch_bbox(i). This is the map both snap stages rank on.
     """
     _validate(query_vectors, page_vectors, grid)
-    sim = np.asarray(query_vectors, dtype=np.float64) @ np.asarray(page_vectors, dtype=np.float64).T
+    sim = _similarity(query_vectors, page_vectors)
     return sim[:, _image_slice(grid)].max(axis=0)
 
 
@@ -88,13 +101,17 @@ def attribution(query_vectors: np.ndarray, page_vectors: np.ndarray, grid: Patch
     Because those tokens are dropped, the total here is a share of the
     image-patch contribution and will NOT equal the full page MaxSim score.
 
-    Do not rank with this. See the module docstring and spec section 6.1.
+    Do not rank with this; rank with dense_relevance. That is a documented
+    rule rather than an enforced one on purpose: the scoring bake-off ranks
+    with this map deliberately, as the control that shows it underperforms,
+    so a type-level barrier would block a measurement the design requires.
     """
     _validate(query_vectors, page_vectors, grid)
-    sim = np.asarray(query_vectors, dtype=np.float64) @ np.asarray(page_vectors, dtype=np.float64).T
+    sim = _similarity(query_vectors, page_vectors)
     winners = sim.argmax(axis=1)
     out = np.zeros(grid.n_image_patches, dtype=np.float64)
-    lo, hi = grid.offset, grid.offset + grid.n_image_patches
+    span = _image_slice(grid)
+    lo, hi = span.start, span.stop
     for token, winner in enumerate(winners):
         if lo <= winner < hi:
             out[winner - lo] += sim[token, winner]

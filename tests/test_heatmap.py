@@ -206,6 +206,7 @@ def test_attribution_is_sparse():
 
     a = attribution(query, page, grid)
 
+    assert np.count_nonzero(a) >= 1, "an all-zero map would satisfy the bounds below"
     assert np.count_nonzero(a) <= query.shape[0]
     assert np.count_nonzero(a) < grid.n_image_patches
 
@@ -221,4 +222,21 @@ def test_attribution_drops_tokens_won_by_special_tokens():
     a = attribution(query, page, grid)
 
     # Only query token 1 can have credited anything.
+    assert np.count_nonzero(a) <= 1
+
+
+def test_attribution_drops_tokens_won_by_a_suffix_token():
+    """The mirror of the prefix case, covering the upper boundary.
+
+    Without this, a < versus <= slip on the hi side is untested: the prefix
+    test only exercises the lower bound.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(8)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(2, 8)))
+
+    page[-1] = query[0]  # last vector is a suffix token
+    a = attribution(query, page, grid)
+
     assert np.count_nonzero(a) <= 1
