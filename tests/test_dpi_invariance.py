@@ -9,6 +9,7 @@ import fitz
 import pytest
 
 from conftest import TEXT_ORIGIN
+from visual_verify.evidence import has_ink, shift
 from visual_verify.ingest.boxes import extract_boxes, word_boxes
 from visual_verify.ingest.render import render_page
 
@@ -105,17 +106,12 @@ def test_box_lands_on_ink_at_both_dpis(born_digital_pdf, tmp_path):
     for dpi in (72, 200):
         rendered = render_page(page, tmp_path / f"p{dpi}.png", dpi=dpi)
         box = word_boxes(extract_boxes(page))[0]
+        bbox = (box.x0, box.y0, box.x1, box.y1)
 
-        img = Image.open(rendered.path).convert("L")
-        crop = img.crop(
-            (
-                int(box.x0 * rendered.width_px),
-                int(box.y0 * rendered.height_px),
-                int(box.x1 * rendered.width_px),
-                int(box.y1 * rendered.height_px),
-            )
-        )
-        assert crop.getbbox() is not None, f"empty crop at {dpi} dpi"
-        assert min(crop.getdata()) < 128, f"no ink in box at {dpi} dpi"
+        img = Image.open(rendered.path)
+        assert has_ink(img, bbox), f"no ink in box at {dpi} dpi"
+        # Control: the assertion above is only meaningful if a WRONG box fails
+        # it. Without this, a bug that returned the whole page would pass.
+        assert not has_ink(img, shift(bbox, dy=0.5)), f"displaced box hit ink at {dpi} dpi"
 
     doc.close()

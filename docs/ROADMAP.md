@@ -153,7 +153,12 @@ this slice is infrastructure.
       draw. This is snap-to-box.
 - [ ] `ground()` returns `GroundedRegion` for text and visual evidence
       uniformly, so the agent and the eval harness treat them the same
-- [ ] Verify selected boxes against rendered ink, as S2 does
+- [ ] Verify a selected region by the text it covers, not by ink. Every
+      candidate already contains ink (435/435 word boxes on one measured page),
+      so an ink check passes a random selector. `evidence.covers_text` is the
+      assertion; `evidence.has_ink` only proves the transform.
+- [ ] Report a random-candidate baseline next to every grounding number, so a
+      selector that beats nothing cannot look like it works
 - [ ] `vvrag ground "<question>" --overlay`, a picture of the claim working
 
 Needs no new hardware: the embeddings are already in Qdrant and the candidate
