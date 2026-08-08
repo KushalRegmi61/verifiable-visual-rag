@@ -80,7 +80,7 @@ span, against a 3-word gold span over pages 2 to 9:
 | --- | --- | --- | --- | --- |
 | block | 0.097 | 0.053 | 14.4% | 1.1% |
 | line | 0.195 | 0.192 | 28.9% | 2.2% |
-| random block | 0.004 | 0.000 | 0.0% | 0.0% |
+| random block | 0.004 to 0.009 | 0.000 | 0.0% | 0.0% |
 
 `proposal.tex` line 452 lists indicative targets of 0.5 to 0.6 mean IoU and about
 80% hit@0.25 for the visual path. **Neither granularity reaches that with a
@@ -250,8 +250,13 @@ A single IoU conflates two failure modes with different owners:
 
 - **Hit rate.** Did the selector pick the candidate containing the gold span?
   This is what the heatmap controls, and where snap-to-box either works or does
-  not. The floor is the random-candidate baseline, measured at 0.004 mean IoU and
-  0.0% hit@0.25.
+  not. The floor is the random-candidate baseline, measured between 0.004 and
+  0.009 mean IoU depending on the sampling seed, with 0.0% hit@0.25 in every
+  run. Quote it as "under 0.01", not as a single figure: it is a Monte Carlo
+  estimate over which block is drawn, and the ceilings above are not, so only
+  the floor moves between runs. `test_the_random_candidate_floor_is_near_zero`
+  requires under 0.02, which is loose enough to survive reseeding and still far
+  below any working selector.
 - **IoU.** How tight is that candidate against gold? This is fixed by granularity
   and is capped at 0.195 for lines no matter how good the selector is.
 
