@@ -3,15 +3,22 @@
 Nothing here creates a rectangle. Every box returned came from derive.py.
 """
 
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 
 from visual_verify.contracts import BBox
+from visual_verify.derive import block_boxes, line_boxes
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.retrieval.geometry import PatchGrid
 
 Reduce = Literal["mean", "sum"]
+
+# Relative gap below which the top two lines are treated as indistinguishable.
+# The heatmap resolves roughly 3.6 lines per patch row, so a near-tie between
+# two lines is the expected case, not an anomaly.
+AMBIGUITY_MARGIN = 0.10
 
 
 def _axis_overlap(n: int, lo: float, hi: float) -> np.ndarray:
@@ -87,3 +94,56 @@ def rank_candidates(
         scored.append((c, score_candidate(relevance, grid, (c.x0, c.y0, c.x1, c.y1), reduce)))
     # sorted() is stable, so equal scores keep their input order.
     return sorted(scored, key=lambda pair: -pair[1])
+
+
+@dataclass(frozen=True)
+class Selection:
+    box: BoxRecord
+    score: float
+    resolution: Literal["line", "block"]
+
+
+def _contains(outer: BoxRecord, inner: BoxRecord) -> bool:
+    cx = (inner.x0 + inner.x1) / 2
+    cy = (inner.y0 + inner.y1) / 2
+    return outer.x0 <= cx <= outer.x1 and outer.y0 <= cy <= outer.y1
+
+
+def snap_to_box(
+    relevance: np.ndarray,
+    grid: PatchGrid,
+    boxes: list[BoxRecord],
+    reduce: Reduce = "mean",
+    margin: float = AMBIGUITY_MARGIN,
+) -> Selection | None:
+    """Select a region: rank blocks, then rank lines inside the winner.
+
+    Two stages rather than a flat ranking over every line because the error is
+    then bounded. A stage-2 mistake still lands inside the correct paragraph,
+    whereas a flat miss can land anywhere on the page.
+
+    When the top two lines are within `margin` relative to each other, the
+    block is returned instead. The heatmap resolves about 3.6 lines per patch
+    row, so committing to a line it cannot distinguish would be a confident
+    guess dressed as evidence.
+
+    Returns None when the page has no candidates at all.
+    """
+    blocks = block_boxes(boxes) if boxes else []
+    ranked_blocks = rank_candidates(relevance, grid, blocks, reduce)
+    if not ranked_blocks:
+        return None
+    best_block, block_score = ranked_blocks[0]
+
+    inside = [ln for ln in line_boxes(boxes) if _contains(best_block, ln)]
+    ranked_lines = rank_candidates(relevance, grid, inside, reduce)
+    if not ranked_lines:
+        return Selection(best_block, block_score, "block")
+
+    top_line, top_score = ranked_lines[0]
+    if len(ranked_lines) > 1:
+        runner_up = ranked_lines[1][1]
+        denominator = abs(top_score) if top_score else 1.0
+        if (top_score - runner_up) / denominator < margin:
+            return Selection(best_block, block_score, "block")
+    return Selection(top_line, top_score, "line")

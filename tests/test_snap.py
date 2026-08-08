@@ -3,7 +3,13 @@
 import numpy as np
 import pytest
 
-from visual_verify.grounding.snap import patch_weights, rank_candidates, score_candidate
+from visual_verify.derive import block_boxes, line_boxes
+from visual_verify.grounding.snap import (
+    patch_weights,
+    rank_candidates,
+    score_candidate,
+    snap_to_box,
+)
 from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.retrieval.geometry import PatchGrid
 
@@ -240,3 +246,76 @@ def test_rank_candidates_is_deterministic_on_ties_with_more_than_two():
     ranked = rank_candidates(r, grid, [tied_1, loser, tied_2, other_loser])
 
     assert [t.text for t, _ in ranked] == ["tied_1", "tied_2", "loser", "other_loser"]
+
+
+def page_boxes():
+    """Two blocks, two lines each, laid out top to bottom on a 4x4 grid page."""
+    return [
+        box(0.05, 0.05, 0.45, 0.20, text="alpha one", block_no=0, line_no=0, kind="word"),
+        box(0.05, 0.25, 0.45, 0.40, text="alpha two", block_no=0, line_no=1, kind="word"),
+        box(0.05, 0.55, 0.45, 0.70, text="beta one", block_no=1, line_no=0, kind="word"),
+        box(0.05, 0.75, 0.45, 0.90, text="beta two", block_no=1, line_no=1, kind="word"),
+    ]
+
+
+def test_snap_returns_a_line_when_one_line_clearly_wins():
+    grid = make_grid()
+    # Patch row 3 (y 0.75-1.0), col 0-1: the region holding "beta two".
+    r = np.full(grid.n_image_patches, 0.05)
+    r[12] = 1.0
+    r[13] = 1.0
+
+    sel = snap_to_box(r, grid, page_boxes())
+
+    assert sel.resolution == "line"
+    assert "beta two" in sel.box.text
+
+
+def test_snap_falls_back_to_the_block_when_lines_are_indistinguishable():
+    """Honest about its own resolution instead of guessing a line."""
+    grid = make_grid()
+    # Uniform heat over the whole lower half: block 1 wins, its lines tie.
+    r = np.full(grid.n_image_patches, 0.05)
+    r[8:16] = 1.0
+
+    sel = snap_to_box(r, grid, page_boxes())
+
+    assert sel.resolution == "block"
+    assert "beta" in sel.box.text
+
+
+def test_snap_stays_inside_the_winning_block():
+    """A stage-2 miss must still land in the right paragraph.
+
+    This is why selection is two-stage rather than a flat ranking over all
+    lines: a flat miss can land anywhere on the page.
+    """
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.05)
+    r[0] = 1.0  # top-left, inside block 0
+
+    sel = snap_to_box(r, grid, page_boxes())
+
+    assert "alpha" in sel.box.text
+    assert "beta" not in sel.box.text
+
+
+def test_snap_returns_none_when_there_are_no_candidates():
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.5)
+
+    assert snap_to_box(r, grid, []) is None
+
+
+def test_snap_never_invents_a_box():
+    """The returned bbox must be one a derived candidate actually has."""
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.05)
+    r[12] = 1.0
+
+    boxes = page_boxes()
+    sel = snap_to_box(r, grid, boxes)
+    corners = (sel.box.x0, sel.box.y0, sel.box.x1, sel.box.y1)
+
+    allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
+    assert corners in allowed
