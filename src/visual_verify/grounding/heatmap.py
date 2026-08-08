@@ -33,6 +33,32 @@ def _validate(query_vectors: np.ndarray, page_vectors: np.ndarray, grid: PatchGr
             f"dimension mismatch: query is {query_vectors.shape[-1]}-d, "
             f"page is {page_vectors.shape[-1]}-d"
         )
+    # A real query never has fewer than 14 tokens: ColQwen2 prepends a fixed
+    # prompt prefix, so even a 3-character query embeds to 14 tokens. A 1-D
+    # or empty query is therefore always a call-site bug, never legitimate
+    # input, and left unchecked it fails deep in numpy (IndexError on a 1-D
+    # array, "zero-size array to reduction operation" on an empty one)
+    # instead of pointing at the actual mistake.
+    if query_vectors.ndim != 2 or query_vectors.shape[0] == 0:
+        raise ValueError(
+            f"query_vectors must be 2-D with at least one token, got shape "
+            f"{query_vectors.shape}; a real query never has fewer than 14 tokens"
+        )
+    # NaN compares greater than every real score, so np.argmax on a relevance
+    # array with even one NaN patch silently returns that patch as the
+    # top-ranked candidate: no exception, no shape anomaly, nothing about the
+    # output looking wrong. Inf is rejected for the same reason it would win
+    # or poison every downstream comparison.
+    if not np.isfinite(page_vectors).all():
+        raise ValueError(
+            "page vectors contain NaN or Inf; argmax would silently select the "
+            "corrupted patch, since NaN compares greater than every real score"
+        )
+    if not np.isfinite(query_vectors).all():
+        raise ValueError(
+            "query vectors contain NaN or Inf; argmax would silently select the "
+            "corrupted patch, since NaN compares greater than every real score"
+        )
 
 
 def _image_slice(grid: PatchGrid) -> slice:

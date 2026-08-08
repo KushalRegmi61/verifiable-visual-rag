@@ -79,3 +79,68 @@ def test_dense_relevance_rejects_a_dimension_mismatch():
 
     with pytest.raises(ValueError, match="dimension"):
         dense_relevance(query, page, grid)
+
+
+def test_dense_relevance_rejects_nan_in_page_vectors():
+    """NaN compares greater than every real score, so argmax would silently
+    pick the corrupted patch as the top-ranked candidate: no exception, no
+    shape anomaly, nothing about the output looking wrong.
+    """
+    grid = make_grid()
+    rng = np.random.default_rng(3)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(3, 8)))
+    page[grid.offset + 1] = np.nan
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        dense_relevance(query, page, grid)
+
+
+def test_dense_relevance_rejects_inf_in_page_vectors():
+    """An infinite dot product would dominate every comparison downstream."""
+    grid = make_grid()
+    rng = np.random.default_rng(4)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(3, 8)))
+    page[grid.offset + 2] = np.inf
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        dense_relevance(query, page, grid)
+
+
+def test_dense_relevance_rejects_nan_in_query_vectors():
+    """A corrupted query token is just as capable of winning a fabricated max."""
+    grid = make_grid()
+    rng = np.random.default_rng(5)
+    page = unit(rng.normal(size=(grid.n_vectors, 8)))
+    query = unit(rng.normal(size=(3, 8)))
+    query[0] = np.nan
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        dense_relevance(query, page, grid)
+
+
+def test_dense_relevance_rejects_a_1d_query():
+    """A real query never has fewer than 14 tokens (ColQwen2's fixed prompt
+    prefix), so a 1-D query is always a caller forgetting the token axis, not
+    legitimate input. Unchecked, numpy fails deep inside with
+    'too many indices for array' instead of naming the actual mistake.
+    """
+    grid = make_grid()
+    page = np.zeros((grid.n_vectors, 8))
+    query = np.zeros(8)
+
+    with pytest.raises(ValueError, match="2-D"):
+        dense_relevance(query, page, grid)
+
+
+def test_dense_relevance_rejects_an_empty_query():
+    """Zero query tokens is a caller bug, not a zero-relevance page; unchecked
+    it fails inside numpy's max reduction instead of naming the mistake.
+    """
+    grid = make_grid()
+    page = np.zeros((grid.n_vectors, 8))
+    query = np.zeros((0, 8))
+
+    with pytest.raises(ValueError, match="2-D"):
+        dense_relevance(query, page, grid)
