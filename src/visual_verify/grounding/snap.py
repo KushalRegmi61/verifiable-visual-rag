@@ -109,6 +109,22 @@ class Selection:
     resolution: Literal["line", "block"]
 
 
+def _validate_relevance(relevance: np.ndarray, grid: PatchGrid) -> None:
+    if relevance.shape != (grid.n_image_patches,):
+        raise ValueError(
+            f"relevance must have shape ({grid.n_image_patches},) to pair one score "
+            f"with each of the grid's patches, got {relevance.shape}; a mismatched "
+            f"array (e.g. one score for the whole page) broadcasts silently and "
+            f"scores every candidate as tied"
+        )
+    if not np.isfinite(relevance).all():
+        raise ValueError(
+            "relevance contains NaN or Inf; NaN compares greater than every real "
+            "score, so argmax and score_candidate would silently select or report "
+            "the corrupted patch as the winner"
+        )
+
+
 def snap_to_box(
     relevance: np.ndarray,
     grid: PatchGrid,
@@ -129,6 +145,7 @@ def snap_to_box(
 
     Returns None when the page has no candidates at all.
     """
+    _validate_relevance(relevance, grid)
     blocks = block_boxes(boxes) if boxes else []
     ranked_blocks = rank_candidates(relevance, grid, blocks, reduce)
     if not ranked_blocks:

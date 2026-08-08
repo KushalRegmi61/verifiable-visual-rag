@@ -423,6 +423,72 @@ def test_patch_rectangles_land_on_the_page_ink(born_digital_pdf, tmp_path):
     )
 
 
+def test_line_resolution_selection_carries_the_lines_score_not_the_blocks():
+    """Selection.score is what S5 thresholds on and S7 reports.
+
+    Constructed so the winning line's own score and the winning block's score
+    are measurably different: a caller returning the block's score here would
+    still pass every other snap test (the box and resolution are unaffected),
+    since only the reported score would be wrong.
+    """
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.05)
+    r[12] = 1.0  # inside "beta two", the winning line
+    r[13] = 1.0
+
+    sel = snap_to_box(r, grid, page_boxes())
+
+    assert sel.resolution == "line"
+    expected_line_score = score_candidate(r, grid, (sel.box.x0, sel.box.y0, sel.box.x1, sel.box.y1))
+    block = next(b for b in block_boxes(page_boxes()) if b.block_no == sel.box.block_no)
+    block_score = score_candidate(r, grid, (block.x0, block.y0, block.x1, block.y1))
+
+    assert block_score != pytest.approx(expected_line_score), "the fixture must make them differ"
+    assert sel.score == pytest.approx(expected_line_score)
+    assert sel.score != pytest.approx(block_score)
+
+
+def test_block_resolution_selection_carries_the_blocks_score():
+    """The mirror of the line-resolution case, on the other live return path."""
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.05)
+    r[8:16] = 1.0  # uniform heat over block 1: lines tie, block wins
+
+    boxes = page_boxes()
+    sel = snap_to_box(r, grid, boxes)
+
+    assert sel.resolution == "block"
+    expected_block_score = score_candidate(
+        r, grid, (sel.box.x0, sel.box.y0, sel.box.x1, sel.box.y1)
+    )
+    assert sel.score == pytest.approx(expected_block_score)
+
+
+def test_snap_to_box_rejects_a_relevance_shape_mismatch():
+    """Without this, a scalar or under-sized array broadcasts silently and
+    every candidate ties, returning a confident selection that means nothing.
+    heatmap.py validates its inputs this hard; snap_to_box took relevance on
+    faith, undefended in the parallel module.
+    """
+    grid = make_grid()
+
+    with pytest.raises(ValueError, match="shape"):
+        snap_to_box(np.array([0.5]), grid, page_boxes())
+
+
+def test_snap_to_box_rejects_a_nan_in_relevance():
+    """A hand-built map containing a NaN must raise, not return a confident
+    line selection with score=nan: NaN compares greater than every real
+    score, so it would silently win any comparison downstream.
+    """
+    grid = make_grid()
+    r = np.full(grid.n_image_patches, 0.05)
+    r[12] = np.nan
+
+    with pytest.raises(ValueError, match="NaN or Inf"):
+        snap_to_box(r, grid, page_boxes())
+
+
 def test_patch_bbox_tiles_the_page_without_gaps_or_overlap():
     grid = make_grid(n_x=4, n_y=3)
     total = sum(

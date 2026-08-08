@@ -73,6 +73,18 @@ def test_text_regions_score_is_exact():
     assert regions[0].score == 1.0
 
 
+def test_text_regions_skips_a_zero_area_span_instead_of_raising():
+    """ingest normally prevents a zero-area span from reaching here, but S5
+    and S7 will hand this seam hand-built BoxRecords. Without the guard, a
+    degenerate box reaches GroundedRegion and pydantic raises ValidationError,
+    an exception type ground()'s contract never documents and cmd_ground does
+    not catch.
+    """
+    degenerate = word(0.2, 0.2, 0.2, 0.2, "revenue")
+
+    assert text_regions("revenue", [degenerate], page=0) == []
+
+
 def make_grid(n_x=4, n_y=4, offset=2, n_suffix=1):
     return PatchGrid(n_x=n_x, n_y=n_y, offset=offset, n_vectors=offset + n_x * n_y + n_suffix)
 
@@ -170,6 +182,80 @@ def test_a_page_with_no_candidates_returns_nothing():
     assert regions == []
 
 
+def test_a_page_with_no_boxes_and_no_vectors_returns_nothing():
+    """A scanned page has neither candidate boxes nor a reason to fetch
+    vectors for them, so demanding vectors before checking for boxes is wrong.
+    ground()'s own docstring promises [] "as on a scanned page"; the
+    empty-boxes check must run before the missing-vectors check or this call
+    raises GroundingError instead.
+    """
+    regions = ground("anything", [], page=0)
+
+    assert regions == []
+
+
+def test_force_text_returns_empty_without_falling_back_to_visual():
+    """force="text" is never otherwise exercised through ground(): deleting
+    `or force == "text"` from the routing condition leaves the suite green,
+    because an absent phrase still returns [] by falling through to the
+    visual path's own empty-boxes/no-vectors handling in most fixtures. Here
+    no vectors are supplied at all, so that fallthrough would raise
+    GroundingError instead of returning [] as force="text" promises.
+    """
+    regions = ground("not anywhere on this page", two_line_page(), page=0, force="text")
+
+    assert regions == []
+
+
+def test_reduce_travels_through_ground_into_the_line_ranking():
+    """Dropping `reduce` from ground()'s call into snap_to_box would silently
+    turn the eval harness's "sum" control into "mean", with no visible
+    symptom: both are valid Reduce values and neither raises.
+
+    Two line candidates in one block, with relevance crafted (via one-hot
+    page vectors so dense_relevance is exactly the query vector itself) so
+    that "mean" ranks the small tight box first and "sum" ranks the box
+    covering the whole page first, matching the area bias score_candidate's
+    own docstring documents. If ground() stopped forwarding `reduce`, both
+    calls would silently use "mean" and return the same bbox.
+    """
+    grid = PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16)
+    page_v = np.eye(16)
+    query_v = np.full((1, 16), 0.1)
+    query_v[0, 9] = 1.0  # patch (col 1, row 2) is hot; everything else is cold
+
+    tight = BoxRecord(
+        kind="word",
+        x0=0.25,
+        y0=0.5,
+        x1=0.5,
+        y1=0.75,
+        text="tight",
+        block_no=0,
+        line_no=0,
+        word_no=0,
+    )
+    whole = BoxRecord(
+        kind="word",
+        x0=0.0,
+        y0=0.0,
+        x1=1.0,
+        y1=1.0,
+        text="whole",
+        block_no=0,
+        line_no=1,
+        word_no=0,
+    )
+    boxes = [tight, whole]
+    common = dict(page=0, page_vectors=page_v, query_vectors=query_v, grid=grid, force="visual")
+
+    mean_default = ground("irrelevant", boxes, **common)
+    summed = ground("irrelevant", boxes, reduce="sum", **common)
+
+    assert mean_default[0].bbox == pytest.approx((0.25, 0.5, 0.5, 0.75)), "mean must favor tight"
+    assert summed[0].bbox == pytest.approx((0.0, 0.0, 1.0, 1.0)), "sum must favor the larger box"
+
+
 def test_the_visual_path_without_vectors_raises():
     """Silently returning nothing would look identical to 'no evidence here'."""
     with pytest.raises(GroundingError, match="vectors"):
@@ -238,6 +324,36 @@ def test_a_visual_region_at_block_resolution_is_also_an_existing_candidate_box()
     assert regions[0].resolution == "block"
     allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
     assert regions[0].bbox in allowed
+
+
+def test_a_visual_regions_score_equals_the_selections_score():
+    """GroundedRegion.score is what S5's verifier thresholds on and S7 reports.
+
+    Pinned independently of snap_to_box: ground() must hand the selection's
+    own score through unchanged, not some other score (e.g. the losing
+    block's, when the selection landed on a line) that happens to be lying
+    around at the call site.
+    """
+    from visual_verify.grounding.heatmap import dense_relevance
+    from visual_verify.grounding.snap import snap_to_box
+
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+    boxes = two_line_page()
+
+    regions = ground(
+        "absent phrase",
+        boxes,
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+
+    relevance = dense_relevance(query_v, page_v, grid)
+    selection = snap_to_box(relevance, grid, boxes)
+
+    assert regions[0].score == pytest.approx(selection.score)
 
 
 def test_a_block_fallback_region_says_so():

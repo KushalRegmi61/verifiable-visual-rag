@@ -56,14 +56,14 @@ def ground(
         if found or force == "text":
             return found
 
+    if not boxes:
+        return []
     if page_vectors is None or query_vectors is None or grid is None:
         raise GroundingError(
             "the visual path needs page_vectors, query_vectors, and grid; "
             "returning no region here would be indistinguishable from "
             "'this page holds no evidence'"
         )
-    if not boxes:
-        return []
 
     relevance = dense_relevance(query_vectors, page_vectors, grid)
     selection = snap_to_box(relevance, grid, boxes, reduce)

@@ -42,4 +42,11 @@ def text_regions(claim: str, boxes: list[BoxRecord], page: int) -> list[Grounded
             text=b.text,
         )
         for b in span_boxes(boxes, claim)
+        # Mirrors rank_candidates's degenerate-box drop in snap.py. Ingest
+        # normally prevents a zero-area span from reaching here, but this
+        # seam also takes hand-built BoxRecords (S5, S7), and without this a
+        # zero-area box would reach GroundedRegion and pydantic would raise
+        # ValidationError, an exception type ground()'s contract never
+        # mentions and cmd_ground does not catch.
+        if b.x1 > b.x0 and b.y1 > b.y0
     ]
