@@ -6,14 +6,14 @@ import pytest
 from PIL import Image
 
 from visual_verify.derive import block_boxes, line_boxes
-from visual_verify.evidence import has_ink, ink_ratio, shift
+from visual_verify.evidence import has_ink, ink_ratio, overlap_fraction, shift
 from visual_verify.grounding.snap import (
     patch_weights,
     rank_candidates,
     score_candidate,
     snap_to_box,
 )
-from visual_verify.ingest.boxes import BoxRecord
+from visual_verify.ingest.boxes import BoxRecord, extract_boxes, word_boxes
 from visual_verify.ingest.render import render_page
 from visual_verify.retrieval.geometry import PatchGrid
 
@@ -391,6 +391,7 @@ def test_patch_rectangles_land_on_the_page_ink(born_digital_pdf, tmp_path):
     """
     doc = fitz.open(born_digital_pdf)
     rendered = render_page(doc[0], tmp_path / "p.png", dpi=150)
+    words = word_boxes(extract_boxes(doc[0]))
     doc.close()
 
     grid = PatchGrid(n_x=23, n_y=32, offset=4, n_vectors=4 + 23 * 32 + 7)
@@ -404,14 +405,21 @@ def test_patch_rectangles_land_on_the_page_ink(born_digital_pdf, tmp_path):
     # nothing on a page with ink scattered across it.
     assert not has_ink(img, shift(heaviest, dy=0.5))
 
-    # Tie the transform to geometry we know independently of the heatmap.
-    # conftest places both baselines at y=100 and y=140 on a 792-point page,
-    # so all the ink sits in roughly rows 3 to 5 of 32 and the bottom three
-    # quarters are blank. A transposed or offset patch_bbox moves this.
-    heaviest_row = int(np.argmax(ratios)) // grid.n_x
-    assert heaviest_row < grid.n_y // 4, (
-        f"heaviest ink at row {heaviest_row} of {grid.n_y}, but the fixture "
-        "puts both lines of text in the top eighth of the page"
+    # Patch geometry and text-layer geometry must agree, since snap-to-box
+    # ranks the second using the first. Nothing else in the suite checks that
+    # coupling: the weighting tests only prove patch_weights and patch_bbox
+    # agree with each other. An index bound cannot do this job here, because
+    # this fixture's text sits near the top-left corner, so a row/col swap
+    # satisfies any bound that the true row satisfies.
+    text_region = (
+        min(w.x0 for w in words),
+        min(w.y0 for w in words),
+        max(w.x1 for w in words),
+        max(w.y1 for w in words),
+    )
+    assert overlap_fraction(heaviest, text_region) > 0.0, (
+        f"heaviest-ink patch {heaviest} does not overlap the text at "
+        f"{text_region}; patch coordinates disagree with the text layer"
     )
 
 
