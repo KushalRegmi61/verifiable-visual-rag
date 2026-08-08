@@ -14,6 +14,11 @@ def _axis_overlap(n: int, lo: float, hi: float) -> np.ndarray:
     edges = np.arange(n + 1, dtype=np.float64) / n
     left, right = edges[:-1], edges[1:]
     covered = np.minimum(right, hi) - np.maximum(left, lo)
+    # Mathematically covered <= right - left = 1/n, so the * n below is <= 1.0.
+    # Float roundoff can still push a full-cell weight a few parts in 1e13
+    # above 1.0 (measured: 1.0000000000004399 at large n). That is noise, not
+    # a bug, and harmless in a weighted mean, so it is deliberately left
+    # unclipped here.
     return np.clip(covered, 0.0, None) * n
 
 

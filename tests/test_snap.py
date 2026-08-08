@@ -66,3 +66,39 @@ def test_a_degenerate_box_raises():
     grid = make_grid()
     with pytest.raises(ValueError, match="positive area"):
         patch_weights(grid, (0.5, 0.5, 0.5, 0.5))
+
+
+def test_a_real_line_box_covers_no_patch_centre_but_still_scores():
+    """The measurement the whole weighting scheme exists for.
+
+    On the real 23x32 grid a line of text is 0.0142 tall against a 0.0312
+    patch cell. Placed inside one row it contains no patch centre at all, so
+    centre containment would score it zero and stage 2 would rank nothing
+    while appearing to work. Area weighting gives it 0.0142 * 32 = 0.4544 of
+    each cell it spans.
+    """
+    grid = PatchGrid(n_x=23, n_y=32, offset=4, n_vectors=4 + 23 * 32 + 7)
+    line_height = 0.0142
+    y0 = 10 / 32  # start on a row boundary, so the line
+    y1 = y0 + line_height  # lies entirely within row 10
+    bbox = (0.1, y0, 0.6, y1)
+
+    w = patch_weights(grid, bbox)
+
+    patch_boxes = [grid.patch_bbox(i) for i in range(grid.n_image_patches)]
+
+    # Not one patch centre falls inside the box.
+    contains_a_centre = any(
+        bbox[0] <= (b[0] + b[2]) / 2 <= bbox[2] and bbox[1] <= (b[1] + b[3]) / 2 <= bbox[3]
+        for b in patch_boxes
+    )
+    assert not contains_a_centre, "the whole point of area weighting is that no centre falls here"
+
+    inside_a_patch = any(
+        b[0] <= bbox[0] and bbox[2] <= b[2] and b[1] <= y0 and y1 <= b[3] for b in patch_boxes
+    )
+    assert not inside_a_patch, "the line must span several patches, not sit in one"
+
+    assert np.count_nonzero(w) > 0
+    assert w.max() == pytest.approx(line_height * grid.n_y, abs=1e-9)
+    assert w.max() < 0.5, "a line covers under half a patch row, as measured"
