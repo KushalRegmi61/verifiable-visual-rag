@@ -79,3 +79,23 @@ def test_collections_default_to_empty():
     assert c.regions == []
     assert a.claims == []
     assert a.abstained_overall is False
+
+
+def test_answer_shown_excludes_abstained_claims():
+    """Iterating `claims` directly would display a claim the verifier refused.
+
+    Withholding those is the whole point of the system, and the guarantee
+    otherwise rests on every consumer remembering to check a boolean.
+    """
+    from visual_verify.contracts import Answer, Claim
+
+    a = Answer(
+        question="q",
+        claims=[
+            Claim(text="kept", confidence=0.9, label="supported", abstained=False),
+            Claim(text="withheld", confidence=0.9, label="unsupported", abstained=True),
+        ],
+    )
+
+    assert [c.text for c in a.shown] == ["kept"]
+    assert len(a.claims) == 2, "the rejected claim must still be present for the eval"

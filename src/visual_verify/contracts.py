@@ -65,8 +65,23 @@ class Answer(BaseModel):
     """The full response to a question."""
 
     question: str
+    # EVERY claim, including the ones that failed verification. The evaluation
+    # harness needs both to compute confident-wrong against coverage, so an
+    # abstained claim is marked rather than removed.
     claims: list[Claim] = Field(default_factory=list)
     abstained_overall: bool = False
+
+    @property
+    def shown(self) -> list["Claim"]:
+        """Only the claims that passed verification. Use this to display.
+
+        `claims` holds rejected claims too, so iterating it directly puts a
+        claim the verifier refused in front of a user, with its regions, and
+        withholding that is the entire point of the system. The guarantee would
+        otherwise rest on every consumer remembering a boolean. This exists so
+        the safe path is also the shortest one.
+        """
+        return [c for c in self.claims if not c.abstained]
 
 
 class RetrievedPage(BaseModel):
