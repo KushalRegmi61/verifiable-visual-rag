@@ -14,3 +14,7 @@ defining a shared symbol here and importing it back from a submodule creates a
 cycle that only works by definition order, which is a trap for whoever edits
 it next.
 """
+
+from visual_verify.grounding.core import GroundingError, ground
+
+__all__ = ["GroundingError", "ground"]

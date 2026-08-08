@@ -1,9 +1,13 @@
 """The text path, and ground() routing."""
 
+import numpy as np
 import pytest
 
+from visual_verify.derive import block_boxes, line_boxes
+from visual_verify.grounding import GroundingError, ground
 from visual_verify.grounding.text_span import text_regions
 from visual_verify.ingest.boxes import BoxRecord
+from visual_verify.retrieval.geometry import PatchGrid
 
 
 def word(x0, y0, x1, y1, text, block_no=0, line_no=0, word_no=0):
@@ -67,3 +71,116 @@ def test_text_regions_score_is_exact():
     regions = text_regions("Revenue", two_line_page(), page=0)
 
     assert regions[0].score == 1.0
+
+
+def make_grid(n_x=4, n_y=4, offset=2, n_suffix=1):
+    return PatchGrid(n_x=n_x, n_y=n_y, offset=offset, n_vectors=offset + n_x * n_y + n_suffix)
+
+
+def planted_vectors(grid, hot_patch, dim=8):
+    """Page and query vectors whose MaxSim maximum is `hot_patch`."""
+    rng = np.random.default_rng(11)
+    page = rng.normal(size=(grid.n_vectors, dim))
+    page /= np.linalg.norm(page, axis=1, keepdims=True)
+    query = rng.normal(size=(3, dim))
+    query /= np.linalg.norm(query, axis=1, keepdims=True)
+    page[grid.offset + hot_patch] = query[0]
+    return page, query
+
+
+def test_an_exact_match_short_circuits_without_touching_vectors():
+    """Text wins by default, and the visual path is not even reachable here."""
+    regions = ground("grew 42", two_line_page(), page=0)
+
+    assert len(regions) == 1
+    assert regions[0].modality == "text"
+
+
+def test_force_visual_bypasses_the_text_match():
+    """proposal.tex line 440 requires measuring the visual path on
+    text-locatable questions, which is impossible without this."""
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+
+    regions = ground(
+        "grew 42",
+        two_line_page(),
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+        force="visual",
+    )
+
+    assert len(regions) == 1
+    assert regions[0].modality == "visual"
+
+
+def test_no_text_match_falls_back_to_the_visual_path():
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+
+    regions = ground(
+        "not on this page at all",
+        two_line_page(),
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+
+    assert len(regions) == 1
+    assert regions[0].modality == "visual"
+
+
+def test_a_page_with_no_candidates_returns_nothing():
+    """Absence of evidence, not weakness of evidence. S4 never abstains."""
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+
+    regions = ground(
+        "anything",
+        [],
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+
+    assert regions == []
+
+
+def test_the_visual_path_without_vectors_raises():
+    """Silently returning nothing would look identical to 'no evidence here'."""
+    with pytest.raises(GroundingError, match="vectors"):
+        ground("not on this page at all", two_line_page(), page=0)
+
+
+def test_ground_is_deterministic():
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+    args = dict(page=0, page_vectors=page_v, query_vectors=query_v, grid=grid)
+
+    first = ground("absent phrase", two_line_page(), **args)
+    second = ground("absent phrase", two_line_page(), **args)
+
+    assert [r.bbox for r in first] == [r.bbox for r in second]
+
+
+def test_a_visual_region_is_always_an_existing_candidate_box():
+    """Snap-to-box, stated as an assertion: never drawn from the heatmap."""
+    grid = make_grid()
+    page_v, query_v = planted_vectors(grid, hot_patch=0)
+    boxes = two_line_page()
+
+    regions = ground(
+        "absent phrase",
+        boxes,
+        page=0,
+        page_vectors=page_v,
+        query_vectors=query_v,
+        grid=grid,
+    )
+
+    allowed = {(b.x0, b.y0, b.x1, b.y1) for b in line_boxes(boxes) + block_boxes(boxes)}
+    assert regions[0].bbox in allowed
