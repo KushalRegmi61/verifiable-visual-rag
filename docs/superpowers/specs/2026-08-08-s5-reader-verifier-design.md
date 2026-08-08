@@ -187,6 +187,20 @@ question
 Grounding runs between the reader and the verifier, per claim, as
 `proposal.tex` lines 340 to 342 specify.
 
+**`answer()` takes `embed_query`, a callable, not a precomputed vector.** There
+is one reader-produced claim per grounding call and each needs its own query
+embedding, so a single vector cannot serve them all. The caller builds the
+embedder once and passes its bound method, which keeps the model loaded once per
+command rather than once per claim. Loading ColQwen2 costs about 20 seconds and
+2.65 GB, so per-claim loading would make the command unusable and would not fit
+alongside itself.
+
+This is the one place the CLI pays a cost `vvrag ground` does not: the claims
+are unknown until the reader has run, so the page vectors are fetched up front
+rather than conditionally, even when every claim ends up grounding through the
+text path and the vectors go unused. One extra Qdrant round trip per command,
+against two model calls per claim.
+
 ## 9. No streaming, and the distinction that matters
 
 The reader's output is **not** streamed to the user.
