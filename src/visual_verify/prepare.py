@@ -124,8 +124,12 @@ def prepare_page(
 
     vectors: np.ndarray | None = None
     grid: PatchGrid | None = None
-    if page_no in index.existing_page_nos(document.sha256):
-        payload = index.get_payload(document.sha256, page_no)
+    # One point lookup, not `page_no in existing_page_nos(sha)`, which scrolls
+    # every point of the document with payloads attached to answer a question
+    # about a single page. This function runs on every request the service
+    # serves.
+    payload = index.get_payload_or_none(document.sha256, page_no)
+    if payload is not None:
         vectors = index.get_vectors(document.sha256, page_no)[ORIGINAL]
         grid = PatchGrid(
             n_x=payload["n_patches_x"],

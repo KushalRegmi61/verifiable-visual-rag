@@ -352,3 +352,12 @@ def test_verify_pass_also_requests_the_index(index, embedder):
 
     assert calls, "the verify path must also request the index"
     assert index.existing_page_nos(SHA) == {0}
+
+
+def test_get_payload_or_none_returns_none_for_a_page_that_was_never_embedded(index):
+    """prepare_page asks this per request to decide whether a visual path
+    exists. get_payload raises IndexError on a missing point, and the obvious
+    guard against that scrolls the whole document."""
+    index.ensure_collection()
+
+    assert index.get_payload_or_none("no-such-doc-sha", 0) is None

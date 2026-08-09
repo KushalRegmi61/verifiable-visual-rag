@@ -219,6 +219,19 @@ class QdrantIndex:
         recs = self.client.retrieve(self.collection, ids=[point_id(doc_sha, page_no)])
         return recs[0].payload
 
+    def get_payload_or_none(self, doc_sha: str, page_no: int) -> dict | None:
+        """get_payload, but absence is an answer rather than an IndexError.
+
+        Exists so a caller can ask "is this one page indexed" with a single
+        point lookup. The obvious alternative, `page_no in
+        existing_page_nos(sha)`, scrolls EVERY point of the document 256 at a
+        time with payloads attached, which is the right shape for `vvrag embed`
+        deciding what to resume and the wrong shape for the API, where
+        prepare_page runs on every question.
+        """
+        recs = self.client.retrieve(self.collection, ids=[point_id(doc_sha, page_no)])
+        return recs[0].payload if recs else None
+
     def get_vectors(self, doc_sha: str, page_no: int) -> dict[str, np.ndarray]:
         """Read stored vectors back. This is what makes a schema change a
         re-index rather than a re-embed."""
