@@ -42,6 +42,14 @@ export default function Home() {
   const [asked, setAsked] = useState("");
   const [pending, setPending] = useState(false);
   const [retrieved, setRetrieved] = useState<RetrievedEvent | null>(null);
+  // Held separately from `retrieved` and NOT cleared on a pinned re-ask. The
+  // pinned branch of _choose_page returns candidates: [] by construction, so
+  // reading the list off `retrieved` made it single-use: click one alternate
+  // page and the row vanishes, and getting back to the original page means
+  // retyping the question and paying for retrieval plus the whole
+  // reader/verifier loop again. This is the UI's only affordance for the
+  // retrieval-was-wrong case, which is exactly the case worth demonstrating.
+  const [alternates, setAlternates] = useState<Candidate[]>([]);
   const [expected, setExpected] = useState<number | null>(null);
   const [claims, setClaims] = useState<ClaimEvent[]>([]);
   const [done, setDone] = useState<DoneEvent | null>(null);
@@ -55,6 +63,9 @@ export default function Home() {
     setAsked(text);
     setError(null);
     setRetrieved(null);
+    // Kept across a pinned re-ask, cleared when a new question is asked: the
+    // ranking belongs to the question, not to the page currently displayed.
+    if (!pin) setAlternates([]);
     setExpected(null);
     setClaims([]);
     setDone(null);
@@ -63,7 +74,22 @@ export default function Home() {
       await ask(
         pin ? { question: text, doc: pin.doc, page: pin.page } : { question: text },
         {
-          onRetrieved: setRetrieved,
+          onRetrieved: (e) => {
+            setRetrieved(e);
+            // Only a fresh retrieval knows the ranking. A pinned re-ask carries
+            // an empty list, and overwriting with it would discard the only
+            // record of what else was considered.
+            //
+            // The top hit is prepended because the service sends candidates as
+            // hits[1:]. Without it, clicking an alternate is one-way: there
+            // would be no button for the page retrieval actually chose.
+            if (!pin) {
+              setAlternates([
+                { doc_sha: e.doc_sha, page: e.page, score: e.score ?? 0 },
+                ...e.candidates,
+              ]);
+            }
+          },
           onClaims: setExpected,
           // Appended rather than replaced: every claim arrives as its own
           // event, already verified, and the list grows as they land.
@@ -134,6 +160,12 @@ export default function Home() {
       {asked && (
         <div className="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
           <section className="min-w-0">
+            {retrieved?.warning && (
+              <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+                {retrieved.warning}
+              </div>
+            )}
+
             {abstained && (
               <div className="mb-4 rounded-xl border-2 border-amber-500/60 bg-amber-500/10 px-4 py-4">
                 <p className="text-sm font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
@@ -143,6 +175,11 @@ export default function Home() {
                   The verifier rejected every claim the reader produced, so the system is
                   declining to answer this question rather than showing an answer it cannot
                   support.
+                  {/* Without this, an unembedded page reads as a judgement about the
+                      evidence when the real cause is that nobody ran `vvrag embed`. */}
+                  {retrieved?.warning &&
+                    " Note the warning above: this page has no embeddings, so that" +
+                      " rejection is very likely a missing index rather than weak evidence."}
                 </p>
               </div>
             )}
@@ -312,13 +349,13 @@ export default function Home() {
                   drawn from the heatmap.
                 </p>
 
-                {retrieved.candidates.length > 0 && (
+                {alternates.length > 0 && (
                   <div className="mt-4">
                     <p className="text-xs font-medium text-black/60 dark:text-white/60">
-                      Other candidate pages
+                      Retrieved pages
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {retrieved.candidates.map((cand: Candidate) => {
+                      {alternates.map((cand: Candidate) => {
                         const current =
                           cand.doc_sha === retrieved.doc_sha && cand.page === retrieved.page;
                         return (

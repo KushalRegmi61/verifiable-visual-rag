@@ -202,3 +202,78 @@ def test_nan_is_still_refused_despite_the_bounds():
     The finiteness validator is not redundant with the bounds."""
     with pytest.raises(ValidationError):
         AskRequest(question="q", threshold=float("nan"))
+
+
+class UnembeddedIndex:
+    """A page that was ingested but never embedded.
+
+    prepare_page returns page_vectors=None for it, which is right for a service
+    (serve text-only rather than a 500) but degrades into a plausible wrong
+    answer: ground() has no visual fallback, so most claims come back
+    insufficient_evidence and the UI blames the verifier.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def get_payload_or_none(self, doc_sha, page_no):
+        return None
+
+
+def test_an_unembedded_page_warns_before_any_model_call(indexed):
+    """index.count() cannot catch this once any other document is indexed, and
+    the CLI already warns. The service is the surface a user actually sees."""
+    from visual_verify.api.ask import UNEMBEDDED_WARNING
+
+    events = run(indexed, AskRequest(question="q"), wrap=UnembeddedIndex)
+
+    retrieved = events[0]
+    assert isinstance(retrieved, Retrieved)
+    assert retrieved.page.page_vectors is None
+    assert retrieved.warning == UNEMBEDDED_WARNING
+    # First event, so a caller can stop before paying for a reader call and one
+    # verifier call per claim.
+    assert events.index(retrieved) == 0
+
+
+def test_an_embedded_page_carries_no_warning(indexed):
+    """Otherwise the banner would be permanent and stop meaning anything."""
+    events = run(indexed, AskRequest(question="q"))
+
+    assert events[0].warning is None
+
+
+def test_an_unembedded_page_does_not_spend_a_gpu_call_per_claim(indexed):
+    """answer_stream calls embed_query once per claim to build vectors that
+    ground() is structurally guaranteed to discard when page_vectors is None.
+    Passing the embedder there costs a multi-second GPU call per claim to
+    compute nothing."""
+    from visual_verify.retrieval.types import FakeEmbedder
+
+    calls = []
+
+    class CountingEmbedder(FakeEmbedder):
+        def embed_query(self, text):
+            calls.append(text)
+            return super().embed_query(text)
+
+    reader, verifier = chats()
+    index = UnembeddedIndex(_make_index(indexed))
+    with Session(make_engine(indexed.db_url)) as session:
+        list(
+            ask_events(
+                AskRequest(question="q"),
+                session=session,
+                index=index,
+                embedder=CountingEmbedder(),
+                reader_chat=reader,
+                verifier_chat=verifier,
+                settings=indexed,
+            )
+        )
+
+    # Exactly one: the retrieval query. None per claim.
+    assert len(calls) == 1

@@ -66,6 +66,10 @@ def to_frame(event) -> tuple[str, dict]:
             "candidates": [
                 {"doc_sha": c.doc_id, "page": c.page, "score": c.score} for c in event.candidates
             ],
+            # Sent before any model call, so a user can stop rather than pay for
+            # a reader call plus a verifier call per claim to reach an answer
+            # this sentence already explains.
+            "warning": event.warning,
         }
     if isinstance(event, ReadingStarted):
         return "reading", {}

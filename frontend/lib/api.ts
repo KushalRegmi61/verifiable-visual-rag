@@ -31,6 +31,10 @@ export type RetrievedEvent = {
   page: number;
   score: number | null;
   candidates: Candidate[];
+  // Sent before any model call. Currently only "this page is not embedded",
+  // which otherwise surfaces as every claim coming back insufficient_evidence
+  // and reads as a verdict about the evidence rather than a missing index.
+  warning: string | null;
 };
 
 export type DoneEvent = { shown: number; withheld: number; abstained_overall: boolean };

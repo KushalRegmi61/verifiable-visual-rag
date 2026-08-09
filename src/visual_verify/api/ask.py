@@ -35,7 +35,7 @@ failure on claim two genuinely is mid-stream, and belongs in an error frame.
 
 import math
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
@@ -117,17 +117,31 @@ class AskRequest(BaseModel):
         return self
 
 
+UNEMBEDDED_WARNING = (
+    "This page is not embedded, so grounding can only use the text layer. Any "
+    "claim the reader paraphrases rather than quotes verbatim will come back as "
+    "insufficient_evidence. Run `vvrag embed` on this document to fix it."
+)
+
+
 @dataclass(frozen=True)
 class Retrieved:
     """Which page will be read, and what else was considered.
 
     `score` is None and `candidates` empty when the caller pinned the page, so
     the frontend gets one event shape either way.
+
+    `warning` carries anything the user should see BEFORE the answer, because it
+    explains an answer that will otherwise look like a verdict. It rides on this
+    event rather than getting its own so the frontend has one place to read it,
+    and it is sent before any model call so a user can stop rather than pay for
+    one reader call and a verifier call per claim.
     """
 
     page: PreparedPage
     score: float | None
     candidates: list[RetrievedPage] = field(default_factory=list)
+    warning: str | None = None
 
 
 AskEvent = Retrieved | AnswerEvent
@@ -180,6 +194,18 @@ def ask_events(
     retrieved = _choose_page(request, session, index, embedder, settings)
     prepared = retrieved.page
 
+    # prepare_page returns page_vectors=None for a page that was ingested but
+    # never embedded. Serving it text-only is right for a service, but it
+    # degrades into a plausible wrong answer: ground() has no visual fallback, a
+    # reader paraphrases by default, so most claims come back
+    # insufficient_evidence and the UI reports "the verifier rejected every
+    # claim", which reads as a judgement about the evidence when the truth is
+    # that nobody ran `vvrag embed`. index.count() cannot catch this once any
+    # other document is indexed. The CLI warns and skips the embedder; this is
+    # the same handling on the surface a user actually sees.
+    if prepared.page_vectors is None:
+        retrieved = replace(retrieved, warning=UNEMBEDDED_WARNING)
+
     threshold = request.threshold if request.threshold is not None else settings.abstain_threshold
     stream = answer_stream(
         request.question,
@@ -190,7 +216,11 @@ def ask_events(
         verifier_chat=verifier_chat,
         threshold=threshold,
         page_vectors=prepared.page_vectors,
-        embed_query=embedder.embed_query,
+        # None in that branch, not embedder.embed_query. answer_stream calls it
+        # once per claim to build query vectors that ground() is structurally
+        # guaranteed to discard when page_vectors is None, so passing it spends
+        # a multi-second GPU call per claim to compute nothing.
+        embed_query=embedder.embed_query if prepared.page_vectors is not None else None,
         grid=prepared.grid,
     )
     return _emit(retrieved, stream)
