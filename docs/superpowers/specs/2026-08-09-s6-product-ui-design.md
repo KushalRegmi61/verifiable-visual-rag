@@ -53,7 +53,7 @@ frontend/                       Next.js, TypeScript. Talks HTTP only.
       |  fetch + SSE
 src/visual_verify/api/          FastAPI. Holds the models. Owns HTTP.
       |  plain Python calls
-src/visual_verify/pipeline.py   prepare_page(): doc, page -> boxes, vectors, grid, image
+src/visual_verify/prepare.py    prepare_page(): doc, page -> boxes, vectors, grid, image
 src/visual_verify/agent/core.py answer_stream(): the claim loop, yielding events
 ```
 
@@ -90,8 +90,10 @@ inverts control against an async SSE generator, and it cannot emit the
 `retrieved` or `reading` events at all, because those happen outside `answer()`.
 The orchestration extraction would still be needed.
 
-`pipeline.prepare_page(...)` lifts the doc, page, boxes, vectors, and grid
+`prepare.prepare_page(...)` lifts the doc, page, boxes, vectors, and grid
 assembly out of `cmd_ask` (`cli.py:520`), and `cmd_ask` is rewritten to call it.
+The module is `prepare.py` rather than `pipeline.py` because `ingest/pipeline.py`
+and `retrieval/pipeline.py` already exist and a third would be ambiguous.
 The CLI and the service then differ only in what they do with the result.
 
 ## 5. Model residency and concurrency
@@ -105,8 +107,8 @@ about 20 s and 2.6 GB, and a request-scoped embedder would make the demo unusabl
 Three constraints follow, all enforced rather than documented.
 
 **Single worker.** Two workers means two ColQwen2 copies and an immediate OOM on
-a 3.63 GB card. The run command pins `--workers 1` and startup logs the worker
-count.
+a 3.63 GB card. The run command pins `--workers 1`, and the README states why
+it is not a default worth changing.
 
 **One `/ask` at a time.** The GPU is single-tenant. An `asyncio.Semaphore(1)`
 serialises the ask handler, so a second concurrent request waits rather than
@@ -246,7 +248,7 @@ precise failure the system exists to prevent, and styling is not a guarantee.
 | API key missing, or provider unknown | fails at **startup**, not on first ask |
 | reader and verifier are the same model | same, at startup, from `answer()`'s existing guard |
 | nothing indexed | `409` with a sentence naming `vvrag embed` |
-| retrieval returns no page | `done` with `abstained_overall: true`; not an error |
+| retrieval returns no page | `error` frame. `index.count()` is checked first and returns a `409`, so an empty hit list against a non-empty index means retrieval itself is broken, not that the question was unanswerable |
 | provider fails mid-stream | `error` event, then close; claims already delivered stay on screen |
 | client disconnects | queue drain stops; the semaphore is released in `finally` |
 | unknown document, page, or image | `404` |
