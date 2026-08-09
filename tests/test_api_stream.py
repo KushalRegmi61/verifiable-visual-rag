@@ -6,6 +6,8 @@ end, which defeats the reason for streaming at all.
 """
 
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -150,3 +152,109 @@ def test_a_cancelled_consumer_joins_the_producer_only_when_it_closes_the_stream(
         "a bare cancelled `async for` was expected to leave the producer running; "
         "if this now joins, the docstring's aclosing warning is stale"
     )
+
+
+def test_finalization_does_not_spin_when_cancellation_is_re_delivered():
+    """The old finalizer was `while not task.done(): await shield(task)`.
+
+    Plain asyncio.Task cancellation delivers CancelledError once, so that loop
+    awaited once and looked correct, which is what the 0.401 s measurement
+    above exercises. An anyio cancel scope, which is how Starlette cancels a
+    StreamingResponse body on client disconnect, re-raises CancelledError at
+    EVERY await point for as long as the scope stays cancelled. The loop then
+    returned immediately on every iteration and spun a core flat out for the
+    remaining tens of seconds of an in-flight reader or verifier call.
+
+    Simulated here by making the await itself always re-raise, which is the
+    property of a cancelled scope that matters, and asserting the finalizer
+    stops asking rather than counting CPU time.
+    """
+    import contextlib
+
+    import visual_verify.api.stream as stream_mod
+
+    shields = []
+
+    async def _cancelled_await():
+        # Yields to the loop first, then raises. Both halves matter: a cancelled
+        # anyio scope does let the loop run, it just re-raises at the next
+        # checkpoint. Raising synchronously instead would starve the executor
+        # future forever and make the unfixed code hang here rather than fail,
+        # and a hanging test reports worse than a failing one.
+        await asyncio.sleep(0)
+        raise asyncio.CancelledError
+
+    def counting_shield(arg, **kwargs):
+        shields.append(1)
+        return _cancelled_await()
+
+    async def run():
+        started = threading.Event()
+
+        def producer():
+            yield 1
+            started.set()
+            time.sleep(0.3)
+            yield 2
+
+        gen = stream_mod.iter_in_thread(producer)
+        async with contextlib.aclosing(gen) as events:
+            async for _ in events:
+                break
+        return None
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(stream_mod.asyncio, "shield", counting_shield)
+    try:
+        with contextlib.suppress(asyncio.CancelledError):
+            asyncio.run(asyncio.wait_for(run(), timeout=10))
+    finally:
+        monkey.undo()
+
+    # One attempt, then the blocking join. The old loop asked until the task
+    # completed, which on a 0.3 s producer is thousands of iterations.
+    assert len(shields) <= 1, f"finalizer re-awaited {len(shields)} times; it is spinning"
+
+
+def test_the_producer_is_still_joined_when_cancellation_is_re_delivered():
+    """The no-spin fix must not buy its quiet by abandoning the thread. The
+    caller releases a GPU semaphore after this returns, so a producer still
+    running at that point hands the card to the next request while ColQwen2
+    work from this one is in flight."""
+    import contextlib
+
+    import visual_verify.api.stream as stream_mod
+
+    finished_at_return = {}
+
+    async def _cancelled_await():
+        await asyncio.sleep(0)
+        raise asyncio.CancelledError
+
+    def counting_shield(arg, **kwargs):
+        return _cancelled_await()
+
+    done = threading.Event()
+
+    async def run():
+        def producer():
+            yield 1
+            time.sleep(0.3)
+            done.set()
+            yield 2
+
+        gen = stream_mod.iter_in_thread(producer)
+        async with contextlib.aclosing(gen) as events:
+            async for _ in events:
+                break
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(stream_mod.asyncio, "shield", counting_shield)
+    try:
+        with contextlib.suppress(asyncio.CancelledError):
+            asyncio.run(asyncio.wait_for(run(), timeout=10))
+        finished_at_return["done"] = done.is_set()
+    finally:
+        monkey.undo()
+
+    assert finished_at_return["done"], "returned before the producer thread finished"

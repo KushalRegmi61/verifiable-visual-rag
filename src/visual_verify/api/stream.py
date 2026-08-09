@@ -1,6 +1,7 @@
 """Bridge a blocking generator into an async consumer."""
 
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 
 _DONE = object()
@@ -33,6 +34,11 @@ async def iter_in_thread[T](make_iter: Callable[[], Iterator[T]]) -> AsyncIterat
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
+    # Set on the worker thread itself, so the join below has a signal that does
+    # not require the event loop to be in a runnable state. The asyncio future
+    # is not enough: completing it goes through call_soon_threadsafe, which the
+    # loop only processes when something is awaiting normally.
+    finished = threading.Event()
 
     def pump() -> None:
         try:
@@ -42,6 +48,7 @@ async def iter_in_thread[T](make_iter: Callable[[], Iterator[T]]) -> AsyncIterat
             loop.call_soon_threadsafe(queue.put_nowait, exc)
         finally:
             loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+            finished.set()
 
     task = loop.run_in_executor(None, pump)
     try:
@@ -54,10 +61,31 @@ async def iter_in_thread[T](make_iter: Callable[[], Iterator[T]]) -> AsyncIterat
             yield item
     finally:
         cancelled = False
-        while not task.done():
+        if not task.done():
             try:
+                # Shielded, so cancelling the consumer does not cancel the work
+                # whose completion the caller's GPU semaphore is waiting on.
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 cancelled = True
+        if cancelled and not finished.is_set():
+            # ONE retry is not enough and a retry LOOP is worse. Plain
+            # asyncio.Task cancellation delivers CancelledError once, which the
+            # await above absorbs; an anyio cancel scope, which is how Starlette
+            # cancels a StreamingResponse body on client disconnect, re-raises
+            # it at EVERY await point for as long as the scope is cancelled. So
+            # `while not task.done(): await shield(task)` returns immediately
+            # every iteration and spins a core flat out for the remaining tens
+            # of seconds of an in-flight reader or verifier call. The 0.401 s
+            # measurement in tests/test_api_stream.py uses task.cancel() and
+            # cannot see it.
+            #
+            # Blocking the loop thread here is deliberate and is the lesser
+            # cost: the request is over either way, the stall lasts exactly as
+            # long as the spin would have, and it does not also burn a core on a
+            # machine that is already GPU-starved. Bounded because it cannot
+            # deadlock: put_nowait on an unbounded queue never blocks, so pump
+            # always reaches its finally.
+            finished.wait()
         if cancelled:
             raise asyncio.CancelledError
