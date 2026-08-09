@@ -201,6 +201,49 @@ export default function Home() {
               </p>
             )}
 
+            {/* The answer, which is the verified claims joined and nothing else.
+                Deliberately NOT a second model call that summarises them: a
+                synthesised sentence would be unverified text presented as the
+                answer, which is the failure this whole system exists to
+                prevent. reader.py states the rule ("the displayed answer is
+                the claims joined, so nothing can drift between what is shown
+                and what is verified"); this is where it becomes visible.
+                Every span here passed the verifier and has a region on the
+                page, and hovering one lights that region. */}
+            {shown.length > 0 && (
+              <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.02] px-4 py-4 dark:border-white/10 dark:bg-white/[0.04]">
+                <p className="text-xs font-medium uppercase tracking-wide text-black/45 dark:text-white/45">
+                  Answer
+                </p>
+                <p className="mt-2 text-[15px] leading-relaxed">
+                  {shown.map((c) => (
+                    <span
+                      key={c.index}
+                      onMouseEnter={() => setHovered(c.index)}
+                      onMouseLeave={() => setHovered(null)}
+                      style={{
+                        textDecorationColor: colourFor(c.index),
+                        opacity: hovered !== null && hovered !== c.index ? 0.4 : 1,
+                      }}
+                      className="cursor-default underline decoration-2 underline-offset-4 transition-opacity"
+                    >
+                      {c.text}{" "}
+                    </span>
+                  ))}
+                </p>
+                <p className="mt-3 text-xs text-black/45 dark:text-white/45">
+                  Every sentence above was checked by a second model and carries its own
+                  evidence region. Hover one to find it on the page.
+                </p>
+              </div>
+            )}
+
+            {shown.length > 0 && (
+              <p className="mt-5 text-xs font-medium uppercase tracking-wide text-black/45 dark:text-white/45">
+                Evidence by claim
+              </p>
+            )}
+
             {shown.length > 0 && (
               <ol className="mt-3 space-y-3">
                 {shown.map((c) => {
