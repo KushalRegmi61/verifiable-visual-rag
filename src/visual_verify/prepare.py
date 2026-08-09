@@ -44,7 +44,14 @@ class PreparedPage:
     grid: PatchGrid | None
 
 
-def _to_record(b: Box) -> BoxRecord:
+def to_record(b: Box) -> BoxRecord:
+    """Re-hydrate a stored Box row into the dataclass derive works over.
+
+    Kept out of the store: derive is a pure core function and must not learn
+    about ORM rows. It lives here rather than in the CLI because the CLI is no
+    longer the only reader of boxes; the API service goes through prepare_page
+    for the same rows.
+    """
     return BoxRecord(
         kind=b.kind,
         x0=b.x0,
@@ -105,10 +112,14 @@ def prepare_page(
         raise PageNotFound(f"no page {page_no} in {Path(document.path).name}")
 
     boxes = [
-        _to_record(b)
+        to_record(b)
         for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
     ]
 
+    # Deferred on purpose: visual_verify.retrieval.index drags in qdrant_client,
+    # whereas retrieval.geometry (imported at module scope above) is pure
+    # stdlib by design. Moving this up would put qdrant_client behind every
+    # import of this module.
     from visual_verify.retrieval.index import ORIGINAL
 
     vectors: np.ndarray | None = None

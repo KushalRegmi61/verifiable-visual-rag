@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 from visual_verify import derive
 from visual_verify.config import Settings
 from visual_verify.contracts import Answer, Claim
-from visual_verify.ingest.boxes import BoxRecord
 from visual_verify.ingest.gate import GateError
 from visual_verify.ingest.pipeline import ingest_pdf
+from visual_verify.prepare import to_record
 from visual_verify.store.engine import make_engine
 from visual_verify.store.models import Box, Document, Page
 from visual_verify.store.repository import SqlSink, document_status
@@ -168,6 +168,15 @@ def _resolve_document(session: Session, needle: str) -> Document | None | list[D
     nothing matched, or the candidate list when more than one matched. The old
     code took `.limit(1)`, so `inspect proposal` silently picked whichever of
     proposal.pdf / reference_proposal.pdf was inserted first.
+
+    A raising twin, prepare.resolve_document, does the same query but turns
+    both "nothing matched" and "several matched" into PageNotFound. cmd_ask
+    is on that one, through prepare_page; cmd_inspect, cmd_embed and cmd_ground
+    are still on this one. They have not been merged because the two contracts
+    differ in what the caller must print: these three enumerate the ambiguous
+    candidates with their sha prefixes so the user can pick one, which the
+    exception's single message cannot carry. Collapsing them is a real
+    behaviour change and belongs in its own commit.
     """
     exact = session.get(Document, needle)
     if exact is not None:
@@ -185,26 +194,6 @@ def _resolve_document(session: Session, needle: str) -> Document | None | list[D
     if len(matches) == 1:
         return matches[0]
     return matches
-
-
-def _to_record(b: Box) -> BoxRecord:
-    """Re-hydrate a stored Box row into the dataclass derive works over.
-
-    Kept here rather than in the store: derive is a pure core function and must
-    not learn about ORM rows, and the CLI is the only thing that reads boxes
-    back out again.
-    """
-    return BoxRecord(
-        kind=b.kind,
-        x0=b.x0,
-        y0=b.y0,
-        x1=b.x1,
-        y1=b.y1,
-        text=b.text,
-        block_no=b.block_no,
-        line_no=b.line_no,
-        word_no=b.word_no,
-    )
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -235,7 +224,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             print(f"no page {args.page} in {Path(doc.path).name}")
             return 1
 
-        stored = [_to_record(b) for b in session.scalars(select(Box).where(Box.page_id == page.id))]
+        stored = [to_record(b) for b in session.scalars(select(Box).where(Box.page_id == page.id))]
         doc_name = Path(doc.path).name
         page_no = page.page_no
         image_path = settings.pages_dir / page.image_path
@@ -406,7 +395,7 @@ def cmd_ground(args: argparse.Namespace) -> int:
             print(f"no page {args.page} in {Path(doc.path).name}")
             return 1
         boxes = [
-            _to_record(b)
+            to_record(b)
             for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
         ]
         image_path = settings.pages_dir / page.image_path
@@ -557,7 +546,28 @@ def cmd_ask(args: argparse.Namespace) -> int:
             print(str(exc))
             return 1
 
-    embedder = _make_embedder(settings)
+    # Printed BEFORE the reader runs, so the user can Ctrl-C before paying for
+    # any model call. prepare_page returns page_vectors=None for a page that
+    # was ingested but never embedded, which the API layer wants (serve a
+    # text-only page rather than a 500) but which degrades silently here:
+    # ground() has no visual fallback, a reader paraphrases by default, and so
+    # most claims come back insufficient_evidence after a reader call and one
+    # verifier call each. The old unhandled IndexError out of get_payload was
+    # ugly but loud; a quiet wrong-looking success is the worse trade in a
+    # system whose whole claim is that it says when it does not know.
+    if prepared.page_vectors is None:
+        print(
+            f"warning: page {prepared.page_no} of {prepared.doc_name} is not embedded.\n"
+            "  Grounding will use the text layer only, so any claim the reader\n"
+            "  paraphrases rather than quotes verbatim will come back as\n"
+            "  insufficient_evidence. Run `vvrag embed` on this document to fix it."
+        )
+
+    # No embedder at all in that branch: _make_embedder loads a 2.6 GB model and
+    # answer_stream would call embed_query once per claim to build vectors that
+    # ground() is then structurally guaranteed to discard. embed_query is
+    # Callable | None in answer_stream and is only called when not None.
+    embedder = _make_embedder(settings) if prepared.page_vectors is not None else None
 
     try:
         reader = CachedChat(make_chat("reader", settings), settings.agent_cache_dir)
@@ -576,7 +586,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
             verifier_chat=verifier,
             threshold=args.threshold,
             page_vectors=prepared.page_vectors,
-            embed_query=embedder.embed_query,
+            embed_query=embedder.embed_query if embedder is not None else None,
             grid=prepared.grid,
         )
     except AgentError as exc:

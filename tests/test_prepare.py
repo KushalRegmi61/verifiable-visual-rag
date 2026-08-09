@@ -1,6 +1,7 @@
 """prepare_page() is the adapter the CLI and the API share."""
 
 import pytest
+from PIL import Image
 from sqlalchemy.orm import Session
 
 from visual_verify.cli import main
@@ -37,9 +38,22 @@ def test_it_returns_boxes_vectors_and_a_grid_that_agree(indexed):
     assert page.boxes, "the text layer should have produced word boxes"
     assert page.image_path.exists()
     assert page.page_vectors is not None
-    # The grid must describe the vectors it was fetched with. A mismatch here
-    # is the failure mode that made grounding place boxes off-page in S3.
+    # Pins only that the grid was built from the array it was fetched with, so
+    # a payload read for one page and vectors read for another cannot pass. It
+    # says nothing about orientation: n_vectors is a stored scalar that a swap
+    # of n_x and n_y never touches, and PatchGrid validates through n_x * n_y,
+    # which is commutative.
     assert page.grid.n_vectors == page.page_vectors.shape[0]
+
+    w, h = Image.open(page.image_path).size
+    # A transposed grid keeps n_x * n_y and therefore n_vectors identical, so the
+    # count check above passes on a swap. Orientation is the discriminator: the
+    # grid comes from smart_resize on the page aspect ratio, so a portrait page
+    # must have more rows than columns. This is the S3 bug that placed every box
+    # off-page while every shape and dtype looked right.
+    assert (page.grid.n_x < page.grid.n_y) == (w < h), (
+        f"grid {page.grid.n_x}x{page.grid.n_y} is transposed against a {w}x{h} page"
+    )
     assert page.doc_name == "born_digital.pdf"
 
 
