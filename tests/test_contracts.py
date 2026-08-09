@@ -120,3 +120,32 @@ def test_claim_carries_the_verifier_reason():
 def test_claim_reason_defaults_to_none():
     """Additive optional field: every existing construction site still works."""
     assert Claim(text="x", confidence=0.5).reason is None
+
+
+def test_an_unverified_claim_is_withheld_even_though_it_never_abstained():
+    """A Claim that never reached the verifier defaults to abstained=False.
+    Reading that as passing is how an unjudged claim would reach a user."""
+    assert Claim(text="never judged", confidence=0.0).withheld is True
+
+
+def test_a_rejected_claim_is_withheld():
+    assert Claim(text="x", confidence=0.8, label="unsupported", abstained=True).withheld is True
+
+
+def test_a_passing_claim_is_not_withheld():
+    assert Claim(text="x", confidence=0.9, label="supported", abstained=False).withheld is False
+
+
+def test_shown_is_the_complement_of_withheld():
+    """The display gate and the API's region strip both read Claim.withheld.
+    If shown ever stops agreeing with it, one of the two guards is wrong and
+    this is the test that says so."""
+    claims = [
+        Claim(text="passes", confidence=0.9, label="supported"),
+        Claim(text="rejected", confidence=0.8, label="unsupported", abstained=True),
+        Claim(text="unjudged", confidence=0.0),
+    ]
+    answer = Answer(question="q", claims=claims)
+
+    assert answer.shown == [c for c in claims if not c.withheld]
+    assert [c.text for c in answer.shown] == ["passes"]

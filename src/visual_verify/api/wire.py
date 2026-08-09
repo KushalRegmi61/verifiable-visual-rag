@@ -34,7 +34,10 @@ def _region(r: GroundedRegion) -> dict:
 
 
 def _claim(index: int, c: Claim) -> dict:
-    withheld = c.abstained or c.label is None
+    # Claim.withheld, not a local re-derivation. Answer.shown filters on the
+    # same property, so the display gate and this geometry strip are one rule
+    # rather than two statements of it that can drift.
+    withheld = c.withheld
     return {
         "index": index,
         "text": c.text,
