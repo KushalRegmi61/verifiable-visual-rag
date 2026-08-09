@@ -45,15 +45,49 @@ def _json_safe(value):
     return value
 
 
+class ClosingStreamingResponse(StreamingResponse):
+    """A StreamingResponse that always closes its body iterator.
+
+    Starlette's stream_response drives `body_iterator` with a bare `async for`.
+    On client disconnect it is cancelled while suspended in `await send(...)`,
+    so the generator stays parked at its `yield` and is never `aclose()`d: its
+    `finally` runs only when the generator is garbage collected through the
+    loop's asyncgen hook. For a body whose `finally` releases a single-permit
+    GPU semaphore, a reference cycle holding it to the next gc pass means every
+    later POST /ask blocks forever on acquire and the service needs a restart.
+
+    This is the same failure `iter_in_thread` documents one level down, fixed
+    there with `aclosing` on the consumer side. The response is the one place
+    that can guarantee it for the body, because the response owns the iteration.
+    """
+
+    async def stream_response(self, send) -> None:
+        async with aclosing(self.body_iterator):
+            await super().stream_response(send)
+
+
+def _cors_origins(settings) -> list[str]:
+    """Origins allowed to call this service.
+
+    Configurable because the frontend's own API base already is, via
+    NEXT_PUBLIC_API. A hardcoded localhost:3000 means a UI on 127.0.0.1, on port
+    3001 because 3000 was taken, or on any real host, has every fetch and every
+    page image blocked by preflight while the server logs a normal 200 and the
+    browser shows only "TypeError: Failed to fetch".
+
+    Deliberately not defaulting to "*": this service holds two billable API keys
+    behind it, and /ask spends money per call.
+    """
+    return list(settings.cors_origins)
+
+
 def build_app(resources: Resources) -> FastAPI:
     app = FastAPI(title="Verifiable Visual RAG")
     app.state.resources = resources
 
-    # The frontend runs on a different origin in development. Deliberately not
-    # "*": this service holds two billable API keys behind it.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
+        allow_origins=_cors_origins(resources.settings),
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
@@ -136,7 +170,18 @@ def build_app(resources: Resources) -> FastAPI:
         await ask_lock.acquire()
         session = Session(resources.engine)
         try:
-            iterator = ask_events(
+            # Off the event loop. ask_events is a plain blocking function and
+            # does all of retrieval on its way to returning an iterator:
+            # index.count() over the network, a multi-second embed_query on the
+            # GPU, then prepare_page's DB query and two Qdrant round trips. Run
+            # inline, the loop is blocked from the moment the user hits Ask
+            # until the first `retrieved` frame, so the browser's parallel GET
+            # for the page image hangs, /health hangs, and a second tab looks
+            # frozen rather than queued. Asks are serial by design because of
+            # the semaphore; the HTTP server stalling with them is not part of
+            # that trade. Exceptions propagate exactly as before.
+            iterator = await asyncio.to_thread(
+                ask_events,
                 request,
                 session=session,
                 index=resources.index,
@@ -205,7 +250,7 @@ def build_app(resources: Resources) -> FastAPI:
                 session.close()
                 ask_lock.release()
 
-        return StreamingResponse(
+        return ClosingStreamingResponse(
             body(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

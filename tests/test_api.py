@@ -5,6 +5,7 @@ loads ColQwen2: three already fragment the 3.63 GB card badly enough to need
 expandable_segments, and a fourth would need process separation.
 """
 
+import contextlib
 import json
 
 import pytest
@@ -158,3 +159,86 @@ def test_asking_with_nothing_indexed_is_409(tmp_path, monkeypatch, born_digital_
     )
     with TestClient(build_app(resources)) as c:
         assert c.post("/ask", json={"question": "q"}).status_code == 409
+
+
+def test_the_streaming_body_is_closed_even_when_send_is_cancelled():
+    """Starlette's stream_response drives body_iterator with a bare `async for`.
+
+    On client disconnect it is cancelled while suspended in `await send(...)`,
+    so the body generator stays parked at its `yield` and is never aclose()d:
+    its `finally` runs only when the generator is garbage collected through the
+    loop's asyncgen hook. This body's finally releases the single-permit GPU
+    semaphore, so a reference cycle holding it past the request means every
+    later POST /ask blocks forever on acquire and the service needs a restart.
+
+    Driven at the ASGI layer rather than through TestClient, because a test
+    client that drains politely never produces the disconnect.
+    """
+    import asyncio
+
+    from visual_verify.api.app import ClosingStreamingResponse
+
+    released = []
+
+    async def body():
+        try:
+            yield "first\n"
+            yield "second\n"
+        finally:
+            released.append("released")
+
+    async def run():
+        response = ClosingStreamingResponse(body(), media_type="text/event-stream")
+
+        sent = 0
+
+        async def send(message):
+            nonlocal sent
+            if message["type"] == "http.response.body":
+                sent += 1
+                if sent == 1:
+                    # The disconnect: cancelled while the body is suspended at
+                    # its yield, exactly where Starlette would be.
+                    raise asyncio.CancelledError
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await response.stream_response(send)
+        # Read INSIDE the loop. asyncio.run() finalizes every pending async
+        # generator during shutdown, so a check after it returns finds the
+        # finally has run whether or not anything closed the body, and passes
+        # identically with the fix removed. Measured: the first version of this
+        # test passed against a stream_response with the aclosing stripped out.
+        return list(released)
+
+    ran_before_loop_shutdown = asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert ran_before_loop_shutdown == ["released"], (
+        "the body generator's finally did not run inside the request; the GPU "
+        "semaphore release is deferred to garbage collection"
+    )
+
+
+def test_a_normal_stream_still_closes_its_body_exactly_once():
+    """The wrapper must not double-close or swallow the normal path."""
+    import asyncio
+
+    from visual_verify.api.app import ClosingStreamingResponse
+
+    closed = []
+
+    async def body():
+        try:
+            yield "only\n"
+        finally:
+            closed.append(1)
+
+    async def run():
+        response = ClosingStreamingResponse(body(), media_type="text/event-stream")
+
+        async def send(message):
+            return None
+
+        await response.stream_response(send)
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    assert closed == [1]
