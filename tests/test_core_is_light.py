@@ -11,7 +11,8 @@ import sys
 # torch and transformers are listed before S3 introduces them, so the guard is
 # armed the moment the retriever is tempted to import a model at package import.
 FORBIDDEN = [
-    "sqlalchemy", "alembic", "qdrant_client", "fastapi", "torch", "transformers",
+    "sqlalchemy", "alembic", "qdrant_client", "fastapi", "starlette", "uvicorn",
+    "torch", "transformers",
     "langchain", "langchain_openai", "langchain_google_genai",
 ]
 

@@ -37,6 +37,14 @@ agent = [
     "langchain-openai>=0.2",
     "langchain-google-genai>=2.0",
 ]
+# The product UI's service half. Like `agent` and unlike `retrieval`, these are
+# not pinned: a web framework bump changes a signature loudly rather than
+# degrading output quality in silence the way the colpali-engine and
+# transformers combination did.
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.scripts]
 vvrag = "visual_verify.cli:main"
