@@ -64,7 +64,16 @@ def to_frame(event) -> tuple[str, dict]:
             "page": event.page.page_no,
             "score": event.score,
             "candidates": [
-                {"doc_sha": c.doc_id, "page": c.page, "score": c.score} for c in event.candidates
+                {
+                    "doc_sha": c.doc_id,
+                    "page": c.page,
+                    "score": c.score,
+                    # Retrieval is corpus-wide, so a candidate is often in
+                    # another document. A chip reading only "page 24" would
+                    # look like page 24 of the document on screen.
+                    "doc_name": event.doc_names.get(c.doc_id, c.doc_id[:12]),
+                }
+                for c in event.candidates
             ],
             # Sent before any model call, so a user can stop rather than pay for
             # a reader call plus a verifier call per claim to reach an answer

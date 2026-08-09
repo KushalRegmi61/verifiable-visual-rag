@@ -277,3 +277,28 @@ def test_an_unembedded_page_does_not_spend_a_gpu_call_per_claim(indexed):
 
     # Exactly one: the retrieval query. None per claim.
     assert len(calls) == 1
+
+
+def test_candidates_from_another_document_carry_its_name(indexed):
+    """Retrieval is corpus-wide and QdrantIndex.search takes no document
+    filter, so a candidate is frequently in a different document than the one
+    being displayed. Found by opening the UI: a chip labelled "page 24" was
+    page 24 of reference_proposal.pdf while the header read proposal.pdf, and
+    clicking it swapped the document with no indication."""
+    events = run(indexed, AskRequest(question="q"))
+
+    retrieved = events[0]
+    for cand in retrieved.candidates:
+        assert cand.doc_id in retrieved.doc_names
+        assert retrieved.doc_names[cand.doc_id].endswith(".pdf")
+
+
+def test_a_pinned_request_needs_no_names(indexed):
+    """The pinned branch reports no candidates, so it must not pay for the
+    lookup either."""
+    doc = run(indexed, AskRequest(question="q"))[0].page.doc_sha
+
+    events = run(indexed, AskRequest(question="q", doc=doc, page=0), wrap=NoSearchIndex)
+
+    assert events[0].candidates == []
+    assert events[0].doc_names == {}

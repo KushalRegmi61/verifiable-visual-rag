@@ -85,7 +85,12 @@ export default function Home() {
             // would be no button for the page retrieval actually chose.
             if (!pin) {
               setAlternates([
-                { doc_sha: e.doc_sha, page: e.page, score: e.score ?? 0 },
+                {
+                  doc_sha: e.doc_sha,
+                  page: e.page,
+                  score: e.score ?? 0,
+                  doc_name: e.doc_name,
+                },
                 ...e.candidates,
               ]);
             }
@@ -358,16 +363,27 @@ export default function Home() {
                       {alternates.map((cand: Candidate) => {
                         const current =
                           cand.doc_sha === retrieved.doc_sha && cand.page === retrieved.page;
+                        // Retrieval searches the whole corpus, so a candidate is
+                        // often in another document. Labelled only "page 24" it
+                        // reads as page 24 of the document on screen, and
+                        // clicking it swaps the document with no indication.
+                        const elsewhere = cand.doc_sha !== retrieved.doc_sha;
                         return (
                           <button
                             key={`${cand.doc_sha}-${cand.page}`}
                             type="button"
                             disabled={pending || current}
+                            title={`${cand.doc_name} page ${cand.page}`}
                             onClick={() =>
                               void run(asked, { doc: cand.doc_sha, page: cand.page })
                             }
                             className="rounded-full border border-black/15 px-3 py-1 text-xs disabled:opacity-40 hover:border-black/40 dark:border-white/20 dark:hover:border-white/50"
                           >
+                            {elsewhere && (
+                              <span className="mr-1 text-black/45 dark:text-white/45">
+                                {cand.doc_name}
+                              </span>
+                            )}
                             page {cand.page}
                             <span className="ml-1 text-black/45 dark:text-white/45">
                               {cand.score.toFixed(3)}

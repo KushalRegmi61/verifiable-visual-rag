@@ -36,8 +36,10 @@ failure on claim two genuinely is mid-stream, and belongs in an error frame.
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from visual_verify.agent.core import answer_stream
@@ -47,6 +49,7 @@ from visual_verify.agent.types import StructuredChat
 from visual_verify.config import Settings
 from visual_verify.contracts import RetrievedPage
 from visual_verify.prepare import PreparedPage, prepare_page
+from visual_verify.store.models import Document
 
 DEFAULT_K = 5
 
@@ -142,6 +145,12 @@ class Retrieved:
     score: float | None
     candidates: list[RetrievedPage] = field(default_factory=list)
     warning: str | None = None
+    # sha -> document name, for the candidates only. Retrieval is corpus-wide
+    # and takes no document filter, so a candidate frequently belongs to a
+    # DIFFERENT document than the one being displayed. Without the name, a chip
+    # reading "page 24" is indistinguishable from page 24 of the document on
+    # screen, and clicking it silently swaps the document under the user.
+    doc_names: dict[str, str] = field(default_factory=dict)
 
 
 AskEvent = Retrieved | AnswerEvent
@@ -170,7 +179,28 @@ def _choose_page(
         raise NoPagesIndexed("retrieval returned no pages")
     top = hits[0]
     prepared = prepare_page(session, index, settings, doc=top.doc_id, page_no=top.page)
-    return Retrieved(page=prepared, score=top.score, candidates=list(hits[1:]))
+    candidates = list(hits[1:])
+    return Retrieved(
+        page=prepared,
+        score=top.score,
+        candidates=candidates,
+        doc_names=_names_for({c.doc_id for c in candidates}, session),
+    )
+
+
+def _names_for(shas: set[str], session: Session) -> dict[str, str]:
+    """Display names for the candidate documents, in one query.
+
+    Cheap next to the GPU embed that produced the hits, and it is the only way
+    the frontend can tell a candidate from another document apart from one in
+    the document on screen.
+    """
+    if not shas:
+        return {}
+    rows = session.execute(
+        select(Document.sha256, Document.path).where(Document.sha256.in_(shas))
+    ).all()
+    return {sha: Path(path).name for sha, path in rows}
 
 
 def ask_events(

@@ -23,7 +23,14 @@ export type ClaimEvent = {
   regions: Region[];
 };
 
-export type Candidate = { doc_sha: string; page: number; score: number };
+export type Candidate = {
+  doc_sha: string;
+  page: number;
+  score: number;
+  // Retrieval is corpus-wide and takes no document filter, so a candidate is
+  // often in a different document than the one on screen.
+  doc_name: string;
+};
 
 export type RetrievedEvent = {
   doc_sha: string;

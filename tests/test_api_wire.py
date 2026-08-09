@@ -136,11 +136,52 @@ def test_a_retrieved_event_names_the_page_and_the_alternatives():
         grid=None,
     )
     other = RetrievedPage(doc_id="abc123", page=7, image_ref="p7.png", score=8.1)
+    elsewhere = RetrievedPage(doc_id="def456", page=24, image_ref="q24.png", score=7.2)
 
-    name, payload = to_frame(Retrieved(page=prepared, score=9.4, candidates=[other]))
+    name, payload = to_frame(
+        Retrieved(
+            page=prepared,
+            score=9.4,
+            candidates=[other, elsewhere],
+            doc_names={"abc123": "proposal.pdf", "def456": "reference_proposal.pdf"},
+        )
+    )
 
     assert name == "retrieved"
     assert payload["doc_sha"] == "abc123"
     assert payload["page"] == 3
     assert payload["score"] == 9.4
-    assert payload["candidates"] == [{"doc_sha": "abc123", "page": 7, "score": 8.1}]
+    # doc_name on every candidate, because retrieval is corpus-wide: a chip
+    # showing only "page 24" reads as page 24 of the document on screen, and
+    # clicking it swaps the document with no indication. Found by opening the
+    # UI, not by a test.
+    assert payload["candidates"] == [
+        {"doc_sha": "abc123", "page": 7, "score": 8.1, "doc_name": "proposal.pdf"},
+        {"doc_sha": "def456", "page": 24, "score": 7.2, "doc_name": "reference_proposal.pdf"},
+    ]
+
+
+def test_a_candidate_with_no_name_falls_back_to_a_short_sha():
+    """to_frame must not raise on a sha the lookup missed. A KeyError here would
+    kill the stream after the 200 was committed, turning a cosmetic gap into a
+    dead request."""
+    from pathlib import Path
+
+    from visual_verify.api.ask import Retrieved
+    from visual_verify.contracts import RetrievedPage
+    from visual_verify.prepare import PreparedPage
+
+    prepared = PreparedPage(
+        doc_sha="abc123",
+        doc_name="proposal.pdf",
+        page_no=3,
+        image_path=Path("p.png"),
+        boxes=[],
+        page_vectors=None,
+        grid=None,
+    )
+    orphan = RetrievedPage(doc_id="0123456789abcdef", page=1, image_ref="x.png", score=1.0)
+
+    _, payload = to_frame(Retrieved(page=prepared, score=9.4, candidates=[orphan]))
+
+    assert payload["candidates"][0]["doc_name"] == "0123456789ab"
