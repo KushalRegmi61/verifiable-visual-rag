@@ -54,6 +54,26 @@ def endpoint_label(base_url: str) -> str:
     return parsed.netloc or parsed.path.strip("/") or base_url
 
 
+def model_family(model: str) -> str:
+    """The bare model name, with any vendor routing prefix stripped.
+
+    Gateways address a model as `<vendor>/<name>`: OpenRouter serves gpt-4o as
+    `openai/gpt-4o`. The model id built below keeps the endpoint host so that a
+    response cache cannot confuse two gateways, and that is correct for a CACHE
+    KEY and wrong for an IDENTITY TEST. `openai:gpt-4o` and
+    `openrouter.ai:openai/gpt-4o` are different strings naming one model, so an
+    independence check comparing ids alone lets gpt-4o grade its own output
+    while /health displays two different-looking names. Comparing families
+    catches that pair.
+
+    Deliberately conservative. It cannot see that `gpt-4o` and
+    `gpt-4o-2024-08-06` are the same weights, or that two gateways both serving
+    `llama-4-scout` are one model. Those remain possible and undetectable here;
+    see test_two_gateways_serving_the_same_model_name_are_not_the_same_model.
+    """
+    return model.rsplit("/", 1)[-1].strip().lower()
+
+
 def model_id(provider: str, model: str, base_url: str | None) -> str:
     """The identity answer() compares and the cache keys on.
 
@@ -139,8 +159,24 @@ def make_chat(role: str, settings: Settings) -> LangChainChat:
             f"{_role_var(role, 'PROVIDER')} is {provider!r}; expected one of {list(PROVIDERS)}"
         )
 
+    base_url = settings.reader_base_url if role == "reader" else settings.verifier_base_url
+
+    if provider != COMPATIBLE and base_url:
+        # Refused rather than ignored. `openai` plus a base_url reads as "use my
+        # gateway", and the branch below would build a plain ChatOpenAI without
+        # it: every call would go to api.openai.com billed to a key the operator
+        # believed unused, or fail 401 with a message naming OPENAI_API_KEY and
+        # never mentioning the endpoint that was discarded. model_id drops the
+        # base_url for these providers too, so /health would show `openai:gpt-4o`
+        # and look correct.
+        raise UnknownProvider(
+            f"{_role_var(role, 'BASE_URL')} is set but {_role_var(role, 'PROVIDER')} is "
+            f"{provider!r}, which always calls the vendor's own endpoint and would "
+            f"silently ignore it. Set {_role_var(role, 'PROVIDER')}={COMPATIBLE!r} to use "
+            f"that endpoint, or unset {_role_var(role, 'BASE_URL')}."
+        )
+
     if provider == COMPATIBLE:
-        base_url = settings.reader_base_url if role == "reader" else settings.verifier_base_url
         if not base_url:
             raise UnknownProvider(
                 f"{_role_var(role, 'PROVIDER')} is {COMPATIBLE!r} but "

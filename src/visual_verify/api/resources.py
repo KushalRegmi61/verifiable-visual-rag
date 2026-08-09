@@ -61,10 +61,25 @@ def check_configuration(settings: Settings) -> None:
     question has been asked. By then the service has reported itself healthy,
     the browser is open, and somebody is watching.
     """
+    from visual_verify.agent.models import model_family
+    from visual_verify.agent.rubric import SCORE_CEILING
+
     # First, because everything downstream needs it and because the tests below
     # it would otherwise be reached with a half-usable service.
     if not settings.qdrant_url:
         raise StartupRefused("VVRAG_QDRANT_URL is not set; the service cannot retrieve anything")
+
+    # A threshold that no score can reach withholds every claim; one that every
+    # score clears withholds none, which turns the abstention gate off while the
+    # service still reports itself healthy. Settings.from_env already refuses a
+    # non-finite value, so by here the comparison is meaningful.
+    if not 0.0 <= settings.abstain_threshold <= SCORE_CEILING:
+        raise StartupRefused(
+            f"VVRAG_ABSTAIN_THRESHOLD is {settings.abstain_threshold}, outside the "
+            f"0 to {SCORE_CEILING} range abstention_score can produce. Below 0 nothing "
+            "is ever withheld and the abstention gate is off; above the ceiling every "
+            "claim is withheld."
+        )
 
     reader = model_id_for("reader", settings)
     verifier = model_id_for("verifier", settings)
@@ -74,6 +89,26 @@ def check_configuration(settings: Settings) -> None:
             "its own output is biased toward it, which is the reason this project "
             "uses two providers. Set VVRAG_VERIFIER_PROVIDER and "
             "VVRAG_VERIFIER_MODEL to something else."
+        )
+
+    # Ids alone are not enough. They carry the endpoint host for the
+    # openai_compatible provider, so `openai:gpt-4o` against a reader and
+    # `openrouter.ai:openai/gpt-4o` against a verifier are two spellings of one
+    # model that compare as different, and the check above waves them through
+    # while /health displays two names that look independent.
+    #
+    # This is deliberately STRICTER than answer_stream's own guard, which has
+    # only two clients and can compare nothing but their ids. A configuration
+    # refused here would have run; the earlier failure is the point, and a
+    # startup check that accepted more than the runtime would be the harmful
+    # direction. See test_the_startup_check_compares_the_id_the_agent_compares.
+    if model_family(settings.reader_model) == model_family(settings.verifier_model):
+        raise StartupRefused(
+            f"reader and verifier both resolve to the model "
+            f"{model_family(settings.reader_model)!r} ({reader} and {verifier}); routing "
+            "one of them through a gateway changes the endpoint, not the weights, so "
+            "the model would still be grading its own output. Set VVRAG_VERIFIER_MODEL "
+            "to a different model."
         )
 
 

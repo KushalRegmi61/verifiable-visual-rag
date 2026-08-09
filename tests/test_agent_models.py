@@ -103,3 +103,62 @@ def test_an_unknown_provider_names_all_three_options():
 
     with pytest.raises(UnknownProvider, match="openai_compatible"):
         make_chat("reader", Settings(reader_provider="anthropic"))
+
+
+def test_model_family_strips_a_gateway_vendor_prefix():
+    """OpenRouter addresses gpt-4o as `openai/gpt-4o`. The id keeps the whole
+    string because it is a cache key; the identity test must not."""
+    from visual_verify.agent.models import model_family
+
+    assert model_family("openai/gpt-4o") == "gpt-4o"
+    assert model_family("gpt-4o") == "gpt-4o"
+    assert model_family("meta-llama/llama-4-scout") == "llama-4-scout"
+
+
+def test_model_family_does_not_collapse_different_models():
+    """A normalizer that over-collapsed would refuse every valid pair and
+    surface as "the service will not start"."""
+    from visual_verify.agent.models import model_family
+
+    assert model_family("openai/gpt-4o") != model_family("openai/gpt-4o-mini")
+    assert model_family("gemini-2.0-flash") != model_family("gpt-4o")
+
+
+def test_a_base_url_with_a_non_compatible_provider_is_refused(monkeypatch):
+    """Set with provider=openai it was silently discarded: ChatOpenAI was built
+    without it, every call went to api.openai.com billed to a key the operator
+    believed unused, and model_id dropped it too so /health showed
+    `openai:gpt-4o` and looked correct."""
+    import pytest
+
+    from visual_verify.agent.models import UnknownProvider, make_chat
+
+    monkeypatch.setenv("OPENAI_API_KEY", "not-a-real-key")
+    settings = Settings(
+        reader_provider="openai",
+        reader_model="gpt-4o",
+        reader_base_url="https://my-gateway/v1",
+    )
+
+    with pytest.raises(UnknownProvider) as exc:
+        make_chat("reader", settings)
+
+    # Both variables, because the fix is a choice between them.
+    assert "VVRAG_READER_BASE_URL" in str(exc.value)
+    assert "VVRAG_READER_PROVIDER" in str(exc.value)
+
+
+def test_the_other_role_is_unaffected_by_a_base_url(monkeypatch):
+    """The guard reads the per-role variable, so a reader base_url must not
+    refuse the verifier."""
+    pytest.importorskip("langchain_google_genai")
+    from visual_verify.agent.models import make_chat
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "not-a-real-key")
+    settings = Settings(
+        reader_base_url="https://my-gateway/v1",
+        verifier_provider="google",
+        verifier_model="gemini-2.0-flash",
+    )
+
+    assert make_chat("verifier", settings).model_id == "google:gemini-2.0-flash"

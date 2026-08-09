@@ -106,11 +106,16 @@ def test_the_id_pin_holds_for_an_openai_compatible_gateway_too(monkeypatch):
     assert model_id_for("verifier", settings) == "openrouter.ai:llama-4-scout"
 
 
-def test_two_gateways_serving_the_same_model_name_are_not_the_same_model():
+def test_two_gateways_serving_the_same_model_name_are_refused():
     """Reader on one gateway and verifier on another, both running a model of
-    the same name, is a self-preference risk the id cannot see: it is the same
-    weights twice. The startup check compares ids, so this pair is ALLOWED, and
-    that limit is recorded here rather than left to be discovered."""
+    the same name, is the same weights twice: a self-preference risk the ids
+    cannot see, because each id carries its own endpoint host.
+
+    The ids genuinely must differ (they are cache keys, and one gateway's answer
+    must not be served for another's), so the check cannot be folded into the id
+    comparison. It is a separate family comparison, and this pins that the
+    stricter check is the one that fires.
+    """
     settings = Settings(
         qdrant_url=":memory:",
         reader_provider="openai_compatible",
@@ -122,7 +127,56 @@ def test_two_gateways_serving_the_same_model_name_are_not_the_same_model():
     )
 
     assert model_id_for("reader", settings) != model_id_for("verifier", settings)
+    with pytest.raises(StartupRefused, match="llama-4-scout"):
+        check_configuration(settings)
+
+
+def test_a_gateway_vendor_prefix_does_not_disguise_the_same_model():
+    """The failure this check exists for. A deployer with no Gemini credit
+    points the verifier at OpenRouter, which addresses gpt-4o as
+    `openai/gpt-4o`. The ids are `openai:gpt-4o` and
+    `openrouter.ai:openai/gpt-4o`, they differ, and both the startup check and
+    answer_stream's own guard used to pass. gpt-4o then graded its own output
+    for every claim while /health displayed two different-looking names.
+    """
+    settings = Settings(
+        qdrant_url=":memory:",
+        reader_provider="openai",
+        reader_model="gpt-4o",
+        verifier_provider="openai_compatible",
+        verifier_model="openai/gpt-4o",
+        verifier_base_url="https://openrouter.ai/api/v1",
+    )
+
+    assert model_id_for("reader", settings) != model_id_for("verifier", settings)
+    with pytest.raises(StartupRefused, match="gpt-4o"):
+        check_configuration(settings)
+
+
+def test_the_family_check_does_not_refuse_genuinely_different_models():
+    """The guard above is only useful if it still admits a valid pair. A
+    normalizer that collapsed too much would refuse every configuration and
+    would be discovered as "the service will not start"."""
+    settings = Settings(
+        qdrant_url=":memory:",
+        reader_provider="openai",
+        reader_model="gpt-4o",
+        verifier_provider="openai_compatible",
+        verifier_model="meta-llama/llama-4-scout",
+        verifier_base_url="https://openrouter.ai/api/v1",
+    )
+
     check_configuration(settings)
+
+
+def test_a_threshold_no_score_can_clear_is_refused():
+    """A negative threshold makes `score < threshold` False for every claim, so
+    nothing is ever withheld and the abstention gate is off while /health still
+    reports the service healthy."""
+    settings = Settings(qdrant_url=":memory:", abstain_threshold=-1.0)
+
+    with pytest.raises(StartupRefused, match="VVRAG_ABSTAIN_THRESHOLD"):
+        check_configuration(settings)
 
 
 def test_an_unknown_role_is_a_programming_error():
