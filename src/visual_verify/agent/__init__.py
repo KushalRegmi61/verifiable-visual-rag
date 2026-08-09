@@ -15,6 +15,6 @@ catches misconfiguration, not genuine weight identity, so a freshly swapped
 reader should not be over-trusted on the strength of this check alone.
 """
 
-from visual_verify.agent.core import AgentError, answer
+from visual_verify.agent.core import AgentError, answer, answer_stream
 
-__all__ = ["AgentError", "answer"]
+__all__ = ["AgentError", "answer", "answer_stream"]

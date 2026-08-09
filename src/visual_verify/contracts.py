@@ -64,6 +64,28 @@ class Claim(BaseModel):
     # Advisory, never a reason to drop the claim, because discarding it would
     # lose an answer. The eval counts these as decomposition failures.
     compound: bool = False
+    # The verifier's one-sentence justification. None until the verifier has
+    # run, like `label`. The product UI shows this for a claim it withholds:
+    # a count alone tells a user nothing, and the region cannot be shown, so
+    # the reason is the only thing left that explains the refusal. S7 puts it
+    # in the eval output for the same purpose.
+    reason: str | None = None
+
+    @property
+    def withheld(self) -> bool:
+        """Whether this claim must not be displayed, and its regions not sent.
+
+        The single statement of the rule. `Answer.shown` filters on it and the
+        API's wire serialiser strips regions on it, so the display gate and the
+        geometry strip cannot drift apart into two subtly different predicates
+        guarding the same guarantee.
+
+        True when the verifier rejected the claim, and ALSO when no verdict
+        exists: a `Claim` that never reached the verifier defaults to
+        `abstained=False`, which would otherwise read as passing. Absence of a
+        verdict is not a passing verdict.
+        """
+        return self.label is None or self.abstained
 
 
 class Answer(BaseModel):
@@ -86,12 +108,11 @@ class Answer(BaseModel):
         otherwise rest on every consumer remembering a boolean. This exists so
         the safe path is also the shortest one.
 
-        Requires `label is not None` as well as `not abstained`: a `Claim` that
-        never reached the verifier defaults to `abstained=False`, which would
-        otherwise read as passing. Absence of a verdict is not a passing
-        verdict, so an unverified claim is never shown.
+        The predicate lives on `Claim.withheld` rather than inline here,
+        because the API strips a rejected claim's regions using the same rule
+        and two hand-written copies of it would eventually disagree.
         """
-        return [c for c in self.claims if c.label is not None and not c.abstained]
+        return [c for c in self.claims if not c.withheld]
 
 
 class RetrievedPage(BaseModel):

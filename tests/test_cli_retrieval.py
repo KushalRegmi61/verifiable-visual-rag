@@ -325,3 +325,53 @@ def test_ask_command_runs_end_to_end_with_cached_fake_models(
     settings = Settings.from_env()
     cached = list(settings.agent_cache_dir.glob("*.json"))
     assert len(cached) == 2, "reader and verifier share one cache dir but must not collide"
+
+
+def test_ask_warns_before_the_reader_runs_when_the_page_is_not_embedded(
+    env, born_digital_pdf, tmp_path, capsys, monkeypatch
+):
+    """prepare_page returns page_vectors=None for an ingested-but-unembedded
+    page. ground() then has no visual fallback, so every claim the reader
+    paraphrases comes back insufficient_evidence after a full reader call and
+    one verifier call, and nothing says the real cause was a missing `vvrag
+    embed`. cmd_ask's index.count() == 0 check does not fire, because some
+    OTHER document is embedded, which is exactly what this test sets up.
+    """
+    import fitz
+
+    import visual_verify.agent.models as models_module
+    from visual_verify.agent.schemas import ClaimList, Verdict
+    from visual_verify.agent.types import FakeChat
+
+    assert main(["ingest", str(born_digital_pdf)]) == 0
+    assert main(["embed", "--all"]) == 0
+
+    unembedded = tmp_path / "unembedded.pdf"
+    doc = fitz.open()
+    doc.new_page(width=612.0, height=792.0).insert_text(
+        (72.0, 100.0), "Revenue grew 42 percent", fontsize=12
+    )
+    doc.save(unembedded)
+    doc.close()
+    assert main(["ingest", str(unembedded)]) == 0
+    capsys.readouterr()
+
+    def fake_make_chat(role, settings):
+        if role == "reader":
+            return FakeChat("openai:fake-reader", [ClaimList(claims=["Revenue grew 42 percent"])])
+        return FakeChat(
+            "google:fake-verifier",
+            [Verdict(label="supported", confidence=0.9, reason="matches the page")],
+        )
+
+    monkeypatch.setattr(models_module, "make_chat", fake_make_chat)
+
+    assert main(["ask", "What happened to revenue?", "--doc", "unembedded", "--page", "0"]) == 0
+    out = capsys.readouterr().out
+
+    assert "not embedded" in out
+    assert "unembedded.pdf" in out
+    assert "insufficient_evidence" in out
+    assert "vvrag embed" in out
+    # Before the reader runs, so a user can Ctrl-C before paying for any call.
+    assert out.index("not embedded") < out.index("Answer (")

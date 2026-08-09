@@ -26,7 +26,7 @@ Every slice exists to make one of those possible, or to measure it.
 | S3 | Retrieval index | ColQwen2 embeddings, Qdrant multivector MaxSim | Batch | S2 | Done |
 | S4 | Grounding core | `ground()`: text-span path, then visual snap-to-box | Query | S2, S3 | Done |
 | S5 | Reader + verifier | Atomic claims, independent judge, abstention gate | No | S4 | Done |
-| S6 | Product UI | FastAPI service + Next.js app: answer, regions, abstain badge | Yes | S5 | Not started |
+| S6 | Product UI | FastAPI service + Next.js app: answer, regions, abstain badge | Yes | S5 | Done |
 | S7 | Eval harness | SlideVQA, auto gold boxes, EM/F1 + IoU + confident-wrong, ablation | Yes | S4, S5 | Not started |
 
 ---
@@ -264,7 +264,7 @@ end-to-end run; nf4 4-bit halves the memory. That exercises the judge loop
 against a real model, but not the canonical Gemini verifier, which remains the
 outstanding item above.
 
-## S6: Product UI (not started)
+## S6: Product UI (done)
 
 **Stack: FastAPI service plus a Next.js frontend.**
 
@@ -281,24 +281,45 @@ it through the same interface. A JavaScript frontend physically cannot import
 the Python module, so the API boundary the proposal describes becomes real
 rather than asserted. A single-process Python UI could always have bypassed it.
 
-- [ ] Brainstorm and write the design spec
-- [ ] Write the implementation plan
-- [ ] FastAPI service exposing ask, and page image or crop retrieval
-- [ ] **Load the models once at service startup and hold them in memory.** Each
+- [x] Brainstorm and write the design spec
+- [x] Write the implementation plan
+- [x] FastAPI service exposing ask, and page image or crop retrieval
+- [x] **Load the models once at service startup and hold them in memory.** Each
       `vvrag search` invocation currently reloads ColQwen2 at about 20 s and
       2.6 GB. A request-scoped embedder would make the demo unusable and would
       OOM under any concurrency.
-- [ ] Single-worker deployment, because the GPU is single-tenant on this
+- [x] Single-worker deployment, because the GPU is single-tenant on this
       hardware. Two workers means two model copies and an immediate OOM.
-- [ ] Next.js app: question input, answer, page image with the region drawn
-- [ ] Region overlay rendered from normalized 0-1 coordinates, so the frontend
+- [x] Next.js app: question input, answer, page image with the region drawn
+- [x] Region overlay rendered from normalized 0-1 coordinates, so the frontend
       scales boxes to whatever size it displays the page at
-- [ ] Abstain badge, visually distinct from a low-confidence answer
-- [ ] Per-claim evidence, since one answer can carry several claims and regions
+- [x] Abstain badge, visually distinct from a low-confidence answer
+- [x] Per-claim evidence, since one answer can carry several claims and regions
 
 Note: `proposal.tex` does not name a UI framework, so this choice contradicts
 nothing in the graded deliverable. Two internal design specs mention Streamlit
 and are now superseded by this file.
+
+Spec: `docs/superpowers/specs/2026-08-09-s6-product-ui-design.md`
+Plan: `docs/superpowers/plans/2026-08-09-s6-product-ui.md`
+
+Worth knowing, because both look like bugs to someone reading only half of it.
+
+**S6 is where the online pipeline first exists end to end.** The CLI still
+splits it, deliberately: `vvrag ask` takes an explicit page because it is a
+debugging surface, while the service retrieves. `api/ask.py` is the only place
+retrieve, read, ground and verify are one call.
+
+**The CLI and the UI disagree about withheld claims on purpose.** `vvrag ask`
+prints every claim including rejected ones, because a diagnostic surface should
+show everything. The UI uses `Answer.shown`, and `api/wire.py` strips a rejected
+claim's regions before they leave the process, so the browser cannot draw
+evidence the verifier refused even by mistake. Same data, opposite default. Do
+not "fix" either to match the other.
+
+**S7 still needs the regions of rejected claims**, which is exactly why that
+strip lives at the API boundary and not in `answer()`. Confident-wrong against
+coverage cannot be computed without them.
 
 ## S7: Eval harness (not started)
 
@@ -308,8 +329,8 @@ verification layers earn their place.
 **Why it exists.** It turns claims into evidence. Without it there is a system
 that appears to work.
 
-- [ ] Brainstorm and write the design spec
-- [ ] Write the implementation plan
+- [x] Brainstorm and write the design spec
+- [x] Write the implementation plan
 - [ ] SlideVQA loading. These are landscape slides, so a different patch grid
       than the project's A4 pages, which works only because S3 stores the
       geometry per page rather than assuming a constant.

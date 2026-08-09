@@ -124,6 +124,46 @@ in the heavier stack.
 Interrupting `vvrag embed` is safe: each page is committed to Qdrant as it
 completes, and re-running resumes from the first unembedded page.
 
+## Running the product UI
+
+The service is read-only over a corpus built beforehand, so ingest and embed
+first:
+
+```bash
+uv sync --all-extras --group dev
+uv run vvrag ingest <pdf>
+uv run vvrag embed --all
+```
+
+Then the service and the frontend, in two terminals:
+
+```bash
+uv run uvicorn visual_verify.api.app:create_app --factory --workers 1 --port 8000
+cd frontend && npm install && npm run dev
+```
+
+`--workers 1` is not a default worth changing. Each worker loads its own
+ColQwen2 at about 2.6 GB and the development card has 3.63 GB, so a second
+worker OOMs at startup. For the same reason the service answers one question at
+a time: a semaphore serialises `/ask` across retrieval and the answer loop,
+because both use the one resident embedder.
+
+Startup takes about 20 seconds, and that is the point. The model loads once for
+the process lifetime rather than once per request, which is what makes the first
+question fast instead of every question slow.
+
+The service refuses to start if `VVRAG_QDRANT_URL` is unset, if an API key is
+missing, or if the reader and the verifier resolve to the same model. That last
+one is the reason the whole design is shaped as it is, and a misconfiguration
+would otherwise be invisible in the output: the service would come up, report
+itself healthy, and only produce biased verdicts once somebody asked something.
+
+Verified claims stream in one at a time as each verdict lands. The reader's
+output is never streamed, so nothing reaches the screen before it has been
+judged. A claim the verifier rejects is listed with its label and the verifier's
+reason and **no region**: the geometry is stripped before it leaves the process,
+so the browser cannot draw it even by mistake.
+
 ## Rebuilding the deck
 
 ```bash
