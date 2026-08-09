@@ -5,6 +5,7 @@ by counting .parent calls is correct in a source checkout and wrong in an
 install. A grader's first move is `pip install`.
 """
 
+import os
 import subprocess
 import venv
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).parent.parent
+SCRIPTS = "Scripts" if os.name == "nt" else "bin"
 
 
 @pytest.mark.slow
@@ -21,7 +23,7 @@ def test_installed_console_script_runs(tmp_path):
     # sys.executable -m pip is not available to build with.
     env_dir = tmp_path / "venv"
     venv.EnvBuilder(with_pip=True).create(env_dir)
-    py = env_dir / "bin" / "python"
+    py = env_dir / SCRIPTS / "python"
 
     subprocess.run(
         [str(py), "-m", "pip", "wheel", "--no-deps", "-w", str(tmp_path), str(REPO)],
@@ -35,11 +37,12 @@ def test_installed_console_script_runs(tmp_path):
     )
 
     result = subprocess.run(
-        [str(env_dir / "bin" / "vvrag"), "status"],
+        [str(env_dir / SCRIPTS / "vvrag"), "status"],
         capture_output=True,
         text=True,
         env={
-            "PATH": str(env_dir / "bin"),
+            **os.environ,
+            "PATH": str(env_dir / SCRIPTS) + os.pathsep + os.environ.get("PATH", ""),
             "HOME": str(tmp_path),
             "VVRAG_DB_URL": f"sqlite:///{tmp_path / 'p.db'}",
             "VVRAG_DATA_DIR": str(tmp_path / "data"),

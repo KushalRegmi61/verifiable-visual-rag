@@ -257,6 +257,13 @@ show-or-abstain is therefore proven only against a scripted fake. Enable billing
 on that project and the tests run as written. Until then, treat any claim about
 verifier behaviour as untested against reality.
 
+Measured while a parallel S5 branch existed (merged here 2026-08-08): a real
+local verifier, `Qwen/Qwen2-VL-2B-Instruct`, loaded on this card (fp16 4.2 GB,
+~16-20 s per load) and judged a true claim `supported` at confidence 1.0 in an
+end-to-end run; nf4 4-bit halves the memory. That exercises the judge loop
+against a real model, but not the canonical Gemini verifier, which remains the
+outstanding item above.
+
 ## S6: Product UI (not started)
 
 **Stack: FastAPI service plus a Next.js frontend.**
