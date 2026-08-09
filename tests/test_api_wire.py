@@ -1,0 +1,119 @@
+"""What leaves the process.
+
+The withheld-region strip lives here rather than in answer(), because S7 needs
+the regions of rejected claims to compute confident-wrong against coverage.
+Putting the guarantee in the core would break the eval instead of protecting
+the user, so it belongs at the boundary the data crosses.
+"""
+
+from visual_verify.agent.events import AnswerComplete, ClaimsProduced, ClaimVerified, ReadingStarted
+from visual_verify.api.wire import to_frame
+from visual_verify.contracts import Answer, Claim, GroundedRegion
+
+
+def region(score=1.0):
+    return GroundedRegion(
+        page=0,
+        bbox=(0.1, 0.2, 0.3, 0.4),
+        score=score,
+        modality="text",
+        text="Revenue grew 42 percent",
+        resolution="line",
+    )
+
+
+def shown_claim():
+    return Claim(
+        text="Revenue grew 42 percent",
+        regions=[region()],
+        confidence=0.9,
+        label="supported",
+        reason="matches the table",
+        abstained=False,
+    )
+
+
+def withheld_claim():
+    return Claim(
+        text="Margins held steady",
+        regions=[region()],
+        confidence=0.8,
+        label="unsupported",
+        reason="the chart shows margin falling",
+        abstained=True,
+    )
+
+
+def test_a_withheld_claim_carries_no_regions():
+    """THE test of this module. A rejected claim's geometry must not reach the
+    browser at all: styling it differently is not a guarantee, because the
+    frontend would then be trusted not to draw what it was handed."""
+    name, payload = to_frame(ClaimVerified(index=1, claim=withheld_claim()))
+
+    assert payload["withheld"] is True
+    assert payload["regions"] == []
+
+
+def test_a_withheld_claim_still_carries_its_label_and_reason():
+    """A bare count tells a user nothing. The reason is what S5 built to make
+    a wrong verdict debuggable and this is the only surface it reaches."""
+    _, payload = to_frame(ClaimVerified(index=1, claim=withheld_claim()))
+
+    assert payload["label"] == "unsupported"
+    assert payload["reason"] == "the chart shows margin falling"
+
+
+def test_a_shown_claim_keeps_its_regions():
+    name, payload = to_frame(ClaimVerified(index=0, claim=shown_claim()))
+
+    assert name == "claim"
+    assert payload["withheld"] is False
+    assert len(payload["regions"]) == 1
+
+
+def test_a_region_carries_the_fields_the_overlay_needs():
+    """resolution and modality exist so a coarse block fallback is
+    distinguishable from a confident line hit. Dropping either here makes S4's
+    bounded-error property invisible to the only human who ever sees it."""
+    _, payload = to_frame(ClaimVerified(index=0, claim=shown_claim()))
+    r = payload["regions"][0]
+
+    assert r["bbox"] == [0.1, 0.2, 0.3, 0.4]
+    assert r["modality"] == "text"
+    assert r["resolution"] == "line"
+
+
+def test_reading_and_claims_events_map_to_their_names():
+    assert to_frame(ReadingStarted())[0] == "reading"
+    name, payload = to_frame(ClaimsProduced(n=3))
+    assert name == "claims"
+    assert payload == {"n": 3}
+
+
+def test_done_counts_shown_against_withheld():
+    complete = AnswerComplete(
+        answer=Answer(
+            question="q",
+            claims=[shown_claim(), withheld_claim()],
+            abstained_overall=False,
+        )
+    )
+
+    name, payload = to_frame(complete)
+
+    assert name == "done"
+    assert payload == {"shown": 1, "withheld": 1, "abstained_overall": False}
+
+
+def test_done_counts_use_shown_not_the_abstained_flag():
+    """Answer.shown requires a verdict as well as not-abstained, because a
+    Claim that never reached the verifier defaults to abstained=False and
+    would otherwise be counted as passing."""
+    unverified = Claim(text="never judged", confidence=0.0)
+    complete = AnswerComplete(
+        answer=Answer(question="q", claims=[unverified], abstained_overall=True)
+    )
+
+    _, payload = to_frame(complete)
+
+    assert payload["shown"] == 0
