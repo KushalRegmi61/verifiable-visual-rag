@@ -1,4 +1,6 @@
-"""answer(): reader, then grounding, then a different model's judgement.
+"""answer_stream(): reader, then grounding, then a different model's judgement.
+
+answer() is the thin drain over it that returns a complete Answer.
 
 Order is fixed by proposal.tex lines 340 to 342: retrieve, read, ground,
 verify. Grounding runs per claim BETWEEN the reader and the verifier, which is
@@ -65,6 +67,15 @@ def answer_stream(
     answer() is a drain over this. Keeping one loop is the point: the
     GroundingError recovery and the `score < threshold` comparison must not
     exist twice, because the copy a product hits is the one no test covers.
+
+    NOT a generator itself. It validates, then returns one. That distinction is
+    load-bearing: a generator body does not run until first advance, so with the
+    guard inside it the AgentError would surface wherever the caller happened to
+    start iterating. The API reaches this through ask_events(), which yields a
+    `retrieved` event first, so the raise would land after a 200 and its headers
+    were already committed and arrive at the browser as an SSE error frame
+    rather than a refusal to start. Validate eagerly and the caller can still
+    turn it into a status code.
     """
     if reader_chat.model_id == verifier_chat.model_id:
         raise AgentError(
@@ -73,6 +84,34 @@ def answer_stream(
             "reason this slice uses two providers"
         )
 
+    return _answer_events(
+        question,
+        image_path,
+        boxes,
+        page=page,
+        reader_chat=reader_chat,
+        verifier_chat=verifier_chat,
+        threshold=threshold,
+        page_vectors=page_vectors,
+        embed_query=embed_query,
+        grid=grid,
+    )
+
+
+def _answer_events(
+    question: str,
+    image_path: Path,
+    boxes: list[BoxRecord],
+    *,
+    page: int,
+    reader_chat: StructuredChat,
+    verifier_chat: StructuredChat,
+    threshold: float,
+    page_vectors: np.ndarray | None,
+    embed_query: Callable[[str], np.ndarray] | None,
+    grid: PatchGrid | None,
+) -> Iterator[AnswerEvent]:
+    """The generator half of answer_stream(). Preconditions already checked."""
     yield ReadingStarted()
     texts = read(reader_chat, image_path, question)
     yield ClaimsProduced(n=len(texts))
@@ -171,4 +210,10 @@ def answer(
     ):
         if isinstance(event, AnswerComplete):
             return event.answer
-    raise AgentError("answer_stream ended without an AnswerComplete event")
+    # An internal invariant, not a configuration problem, so deliberately NOT
+    # AgentError: the CLI catches that one and presents it as something the user
+    # should go and fix, which this is not. Unreachable today. It stays because
+    # answer() is annotated -> Answer, nothing here runs a type checker, and an
+    # early return added to _answer_events later would otherwise make this
+    # function return None to be discovered somewhere far away.
+    raise RuntimeError("answer_stream ended without an AnswerComplete event")

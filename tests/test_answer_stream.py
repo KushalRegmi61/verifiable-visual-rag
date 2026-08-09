@@ -8,7 +8,9 @@ is the one no S5 test covers.
 
 from pathlib import Path
 
-from visual_verify.agent import answer, answer_stream
+import pytest
+
+from visual_verify.agent import AgentError, answer, answer_stream
 from visual_verify.agent.events import AnswerComplete, ClaimsProduced, ClaimVerified, ReadingStarted
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.agent.types import FakeChat
@@ -129,24 +131,51 @@ def test_answer_returns_exactly_what_the_stream_finished_with():
     assert direct == streamed
 
 
-def test_the_same_model_guard_still_raises_from_the_stream():
-    """AgentError must surface when the generator is first advanced, not be
-    swallowed because nobody iterated it."""
-    import pytest
+def test_the_same_model_guard_raises_before_anything_is_iterated():
+    """Eagerly, at call time, with no list() to drive the generator.
 
-    from visual_verify.agent import AgentError
+    The earlier version of this test wrapped the call in list(), which drives
+    the generator to exhaustion and therefore passed whether the guard fired at
+    call time, on first advance, or on the last claim. It could not distinguish
+    the property it was named for.
 
+    Eager matters concretely. The API reaches this through ask_events(), which
+    yields a `retrieved` event first, so a guard that waited for first advance
+    would raise after the 200 and its headers were committed and reach the
+    browser as an SSE error frame instead of a refusal to start.
+    """
     same = FakeChat("same", [ClaimList(claims=["x"])])
     other = FakeChat("same", [Verdict(label="supported", confidence=0.5, reason="r")])
 
     with pytest.raises(AgentError):
-        list(
-            answer_stream(
-                "q",
-                Path("p.png"),
-                page_boxes(),
-                page=0,
-                reader_chat=same,
-                verifier_chat=other,
-            )
+        answer_stream(
+            "q",
+            Path("p.png"),
+            page_boxes(),
+            page=0,
+            reader_chat=same,
+            verifier_chat=other,
         )
+
+
+def test_a_reader_that_returns_nothing_reports_a_count_of_zero():
+    reader = FakeChat("r", [ClaimList(claims=[])])
+    verifier = FakeChat("v", [])
+
+    events = list(
+        answer_stream(
+            "q",
+            Path("p.png"),
+            page_boxes(),
+            page=0,
+            reader_chat=reader,
+            verifier_chat=verifier,
+        )
+    )
+
+    assert isinstance(events[0], ReadingStarted)
+    assert isinstance(events[1], ClaimsProduced)
+    assert events[1].n == 0
+    assert isinstance(events[2], AnswerComplete)
+    assert events[2].answer.abstained_overall is True
+    assert len(events) == 3
