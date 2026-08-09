@@ -64,6 +64,12 @@ class Claim(BaseModel):
     # Advisory, never a reason to drop the claim, because discarding it would
     # lose an answer. The eval counts these as decomposition failures.
     compound: bool = False
+    # The verifier's one-sentence justification. None until the verifier has
+    # run, like `label`. The product UI shows this for a claim it withholds:
+    # a count alone tells a user nothing, and the region cannot be shown, so
+    # the reason is the only thing left that explains the refusal. S7 puts it
+    # in the eval output for the same purpose.
+    reason: str | None = None
 
 
 class Answer(BaseModel):

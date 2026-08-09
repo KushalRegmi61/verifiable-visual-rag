@@ -100,6 +100,7 @@ def answer(
                 regions=regions,
                 confidence=verdict.confidence,
                 label=verdict.label,
+                reason=verdict.reason,
                 abstained=score < threshold,
                 compound=is_compound(text),
             )

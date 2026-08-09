@@ -223,3 +223,24 @@ def test_a_claim_that_cannot_be_grounded_does_not_abort_the_whole_answer():
     assert len(grounded.regions) == 1
     assert ungroundable.regions == []
     assert ungroundable.label == "insufficient_evidence"
+
+
+def test_answer_carries_the_verifier_reason_onto_the_claim():
+    """The reason is the only thing that makes a wrong verdict debuggable, and
+    the UI's withheld panel is built around it. Dropping it here made it
+    unreachable outside the verifier."""
+    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    verifier = FakeChat(
+        "v", [Verdict(label="unsupported", confidence=0.8, reason="the chart shows a fall")]
+    )
+
+    out = answer(
+        "What happened?",
+        Path("p.png"),
+        page_boxes(),
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+    )
+
+    assert out.claims[0].reason == "the chart shows a fall"
