@@ -112,8 +112,6 @@ def test_answer_shown_excludes_a_claim_that_never_reached_the_verifier():
 
 
 def test_claim_carries_the_verifier_reason():
-    from visual_verify.contracts import Claim
-
     c = Claim(text="Margins held steady", confidence=0.5, reason="the chart shows margin falling")
 
     assert c.reason == "the chart shows margin falling"
@@ -121,6 +119,4 @@ def test_claim_carries_the_verifier_reason():
 
 def test_claim_reason_defaults_to_none():
     """Additive optional field: every existing construction site still works."""
-    from visual_verify.contracts import Claim
-
     assert Claim(text="x", confidence=0.5).reason is None
