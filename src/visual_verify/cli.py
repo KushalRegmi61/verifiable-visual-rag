@@ -520,64 +520,43 @@ def _print_ask_result(result: Answer, threshold: float) -> None:
 def cmd_ask(args: argparse.Namespace) -> int:
     """Answer a question from one page, with every claim verified before it shows.
 
-    Mirrors cmd_ground's vector-fetching adapter pattern: it fetches the
-    page's stored vectors and grid so answer() and ground() never have to
-    touch Qdrant or a GPU directly. The difference from cmd_ground is that a
-    single claim's query embedding is computed there, once, from the fixed CLI
-    argument, whereas here the reader produces an unknown number of claims at
-    runtime, so answer() takes a bound `embed_query` callable and embeds each
-    claim's text itself as it is produced. The embedder is still constructed
-    exactly once here, up front, so it loads its weights once per command
-    rather than once per claim.
+    Page assembly (document resolution, word boxes, stored vectors, patch
+    grid) is delegated to prepare.prepare_page, which the API service also
+    calls: a PatchGrid that disagrees with the vectors it describes places
+    boxes off-page while every shape and dtype still looks right, so it is
+    built in exactly one place.
+
+    The embedder is constructed here, up front, rather than inside answer().
+    cmd_ground knows its single claim from a CLI argument and can embed it
+    once; here the reader produces an unknown number of claims at runtime, so
+    answer() takes a bound `embed_query` callable and embeds each claim itself.
+    Building the embedder once per command rather than once per claim is what
+    keeps the model weights loading a single time.
     """
     import math
 
     from visual_verify.agent import AgentError, answer
     from visual_verify.agent.cache import CachedChat
     from visual_verify.agent.models import MissingApiKey, UnknownProvider, make_chat
-    from visual_verify.retrieval.geometry import PatchGrid
-    from visual_verify.retrieval.index import ORIGINAL
+    from visual_verify.prepare import PageNotFound, prepare_page
 
     if not math.isfinite(args.threshold):
         print(f"--threshold must be a finite number, got {args.threshold}")
         return 1
 
     settings = Settings.from_env()
-    with _session(settings) as session:
-        found = _resolve_document(session, args.doc)
-        if found is None or isinstance(found, list):
-            print(f"no unique document matching {args.doc!r}")
-            return 1
-        doc = found
-        page = session.scalar(
-            select(Page).where(Page.doc_sha == doc.sha256, Page.page_no == args.page)
-        )
-        if page is None:
-            print(f"no page {args.page} in {Path(doc.path).name}")
-            return 1
-        boxes = [
-            _to_record(b)
-            for b in session.scalars(select(Box).where(Box.page_id == page.id, Box.kind == "word"))
-        ]
-        image_path = settings.pages_dir / page.image_path
-
-    # Unlike cmd_ground, the claim text is not known yet (the reader has not
-    # run), so there is no way to check span_boxes first and skip the vector
-    # fetch when the text path will suffice. Vectors are always fetched here;
-    # a claim that grounds through the text path simply never uses them.
     index = _make_index(settings)
     if index.count() == 0:
         print("no pages indexed; run `vvrag embed` first")
         return 1
-    payload = index.get_payload(doc.sha256, args.page)
-    stored = index.get_vectors(doc.sha256, args.page)[ORIGINAL]
-    grid = PatchGrid(
-        n_x=payload["n_patches_x"],
-        n_y=payload["n_patches_y"],
-        offset=payload["patch_offset"],
-        n_vectors=stored.shape[0],
-    )
-    page_vectors = stored
+
+    with _session(settings) as session:
+        try:
+            prepared = prepare_page(session, index, settings, doc=args.doc, page_no=args.page)
+        except PageNotFound as exc:
+            print(str(exc))
+            return 1
+
     embedder = _make_embedder(settings)
 
     try:
@@ -590,15 +569,15 @@ def cmd_ask(args: argparse.Namespace) -> int:
     try:
         result = answer(
             args.question,
-            image_path,
-            boxes,
-            page=args.page,
+            prepared.image_path,
+            prepared.boxes,
+            page=prepared.page_no,
             reader_chat=reader,
             verifier_chat=verifier,
             threshold=args.threshold,
-            page_vectors=page_vectors,
+            page_vectors=prepared.page_vectors,
             embed_query=embedder.embed_query,
-            grid=grid,
+            grid=prepared.grid,
         )
     except AgentError as exc:
         print(f"cannot answer: {exc}")
