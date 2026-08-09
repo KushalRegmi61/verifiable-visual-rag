@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 
 from visual_verify.agent.core import answer_stream
 from visual_verify.agent.events import AnswerEvent
+from visual_verify.agent.rubric import SCORE_CEILING
 from visual_verify.agent.types import StructuredChat
 from visual_verify.config import Settings
 from visual_verify.contracts import RetrievedPage
@@ -67,11 +68,20 @@ class AskRequest(BaseModel):
     doc: str | None = None
     page: int | None = Field(default=None, ge=0)
     k: int = Field(default=DEFAULT_K, ge=1, le=20)
-    threshold: float | None = None
+    # Bounded to the range abstention_score can actually produce. Unbounded, any
+    # unauthenticated caller could POST threshold=-1 and make `score < threshold`
+    # False for every claim: nothing abstains, every claim passes
+    # `Claim.withheld`, and unsupported claims are displayed with their regions
+    # drawn on the page. That would put the one safety property in pillar 3 under
+    # remote control. S7 sweeps the threshold in-process against answer(), so
+    # nothing is lost by refusing values on the wire that no score can straddle.
+    threshold: float | None = Field(default=None, ge=0.0, le=SCORE_CEILING)
 
     @field_validator("threshold")
     @classmethod
     def _finite(cls, v: float | None) -> float | None:
+        # Runs alongside the ge/le bounds above rather than instead of them. NaN
+        # compares False against both, so a bounded field alone still admits it.
         if v is not None and not math.isfinite(v):
             raise ValueError("threshold must be a finite number")
         return v

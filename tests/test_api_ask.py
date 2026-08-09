@@ -167,3 +167,38 @@ def test_an_empty_corpus_raises_at_call_time_not_on_first_advance(
                 verifier_chat=verifier,
                 settings=settings,
             )
+
+
+def test_a_threshold_below_the_floor_is_refused():
+    """Unbounded, any unauthenticated caller could POST threshold=-1 and make
+    `score < threshold` False for every claim: nothing abstains, every claim
+    passes Claim.withheld, and unsupported claims are displayed with their
+    regions drawn on the page. That puts the one safety property in pillar 3
+    under remote control. S7 sweeps the threshold in-process against answer(),
+    so nothing is lost by refusing it here."""
+    with pytest.raises(ValidationError):
+        AskRequest(question="q", threshold=-1.0)
+
+
+def test_a_threshold_above_the_ceiling_is_refused():
+    from visual_verify.agent.rubric import SCORE_CEILING
+
+    with pytest.raises(ValidationError):
+        AskRequest(question="q", threshold=SCORE_CEILING + 0.1)
+
+
+def test_the_whole_producible_range_is_still_accepted():
+    """The bound is only correct if it admits every score abstention_score can
+    actually return. A tighter one would make part of the rubric unreachable."""
+    from visual_verify.agent.rubric import SCORE_CEILING
+
+    assert AskRequest(question="q", threshold=0.0).threshold == 0.0
+    assert AskRequest(question="q", threshold=SCORE_CEILING).threshold == SCORE_CEILING
+
+
+def test_nan_is_still_refused_despite_the_bounds():
+    """ge/le alone do NOT catch NaN: it compares False against both, so a
+    bounded field would silently admit the one value that disables the gate.
+    The finiteness validator is not redundant with the bounds."""
+    with pytest.raises(ValidationError):
+        AskRequest(question="q", threshold=float("nan"))

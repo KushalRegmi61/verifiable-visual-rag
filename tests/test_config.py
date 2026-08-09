@@ -73,3 +73,66 @@ def test_env_overrides_abstain_threshold(monkeypatch):
 
     args = build_parser().parse_args(["ask", "q", "--doc", "abc", "--page", "1"])
     assert args.threshold == 4.0
+
+
+def test_a_non_finite_threshold_from_the_environment_is_refused(monkeypatch):
+    """NaN is the dangerous one, and it is not an exotic input: a templating
+    system rendering an unset value, or a plain typo, produces it.
+
+    `score < threshold` is False for every comparison against NaN, so nothing
+    ever abstains: unsupported claims come back with abstained=False,
+    Claim.withheld is False, the API ships their regions, and the UI draws
+    evidence boxes for them. The abstention gate is off and every surface still
+    reports success. A bare float() accepts "nan" without complaint, which is
+    how the environment became the one entry point that did not check.
+    """
+    import pytest
+
+    monkeypatch.setenv("VVRAG_ABSTAIN_THRESHOLD", "nan")
+    with pytest.raises(ValueError, match="VVRAG_ABSTAIN_THRESHOLD"):
+        Settings.from_env()
+
+
+def test_the_infinities_are_refused_too(monkeypatch):
+    """inf withholds every claim rather than none, which is the safe direction
+    and still a misconfiguration that should not start silently."""
+    import pytest
+
+    monkeypatch.setenv("VVRAG_ABSTAIN_THRESHOLD", "inf")
+    with pytest.raises(ValueError, match="VVRAG_ABSTAIN_THRESHOLD"):
+        Settings.from_env()
+
+
+def test_a_non_numeric_threshold_names_the_variable(monkeypatch):
+    """float() raises "could not convert string to float: 'high'", which names
+    neither the variable nor the file it came from."""
+    import pytest
+
+    monkeypatch.setenv("VVRAG_ABSTAIN_THRESHOLD", "high")
+    with pytest.raises(ValueError, match="VVRAG_ABSTAIN_THRESHOLD"):
+        Settings.from_env()
+
+
+def test_cors_origins_default_to_the_dev_frontend(monkeypatch):
+    monkeypatch.delenv("VVRAG_CORS_ORIGINS", raising=False)
+    assert Settings.from_env().cors_origins == ("http://localhost:3000",)
+
+
+def test_cors_origins_are_configurable(monkeypatch):
+    """The frontend's API base is already an environment variable, so a
+    hardcoded origin on this side made the pair unconfigurable: a UI on 3001,
+    on 127.0.0.1, or on a real host had every request blocked by preflight
+    while the server logged a normal 200."""
+    monkeypatch.setenv("VVRAG_CORS_ORIGINS", "https://app.example.com, http://127.0.0.1:3001")
+    assert Settings.from_env().cors_origins == (
+        "https://app.example.com",
+        "http://127.0.0.1:3001",
+    )
+
+
+def test_an_empty_cors_value_falls_back_rather_than_blocking_everything(monkeypatch):
+    """An empty allow-list blocks every browser request and looks identical to
+    a working service from the server side, so it is not something to reach by
+    setting a variable to the empty string."""
+    monkeypatch.setenv("VVRAG_CORS_ORIGINS", "   ")
+    assert Settings.from_env().cors_origins == ("http://localhost:3000",)

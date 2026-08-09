@@ -56,6 +56,13 @@ def abstention_score(label: str, confidence: float) -> float:
     return _BAND * _RANK[label] + confidence
 
 
+# The highest score any claim can reach: "supported" at full confidence. A
+# threshold above this admits nothing at all, so it is the upper bound anywhere
+# a threshold is accepted from outside the process (the environment, an HTTP
+# body). Derived here for the same reason SUPPORTED_FLOOR is: a change to _RANK
+# or _BAND must not leave a hand-copied 7.0 behind in two other modules.
+SCORE_CEILING = abstention_score("supported", 1.0)
+
 # The "supported" floor at zero confidence: the default abstention threshold,
 # admitting only fully supported claims. core.py's DEFAULT_THRESHOLD and
 # config.py's Settings.abstain_threshold default both used to repeat this as
