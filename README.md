@@ -111,7 +111,35 @@ VVRAG_VERIFIER_PROVIDER=google    VVRAG_VERIFIER_MODEL=gemini-2.0-flash
 ```
 
 `OPENAI_API_KEY` and `GOOGLE_API_KEY` go in `.env`, which is gitignored. Both
-models are sent a page image, so both must be vision-capable. Responses are
+models are sent a page image, so both must be vision-capable.
+
+Any OpenAI-shaped gateway works as a third provider, so the vendor is an
+environment variable rather than a code change. OpenRouter, Groq, Together,
+DeepSeek, or a local vLLM or Ollama:
+
+```bash
+VVRAG_VERIFIER_PROVIDER=openai_compatible
+VVRAG_VERIFIER_MODEL=<a vision model that supports tool calling>
+VVRAG_VERIFIER_BASE_URL=https://openrouter.ai/api/v1
+VVRAG_VERIFIER_API_KEY=<key for that gateway>
+```
+
+The key is per role, not shared, because the point of the arrangement is for
+the reader and the verifier to sit behind different vendors. Two requirements
+are not negotiable and neither is checked for you: the model must accept images,
+and it must support tool calling or a native JSON-schema mode. Without the
+second, `with_structured_output` falls back to prompt-and-parse, which is the
+correctly-shaped wrong output this layer exists to prevent. Confirm on a real
+call rather than assuming.
+
+The model id, which the response cache keys on and which the reader-verifier
+independence check compares, is the endpoint HOST rather than the literal
+`openai_compatible`. Two gateways serving a model of the same name are different
+weights behind an identical string, and a shared cache key would attribute one
+vendor's answer to another. The flip side is a limit worth stating: the same
+model served by two gateways reads as two different models to that check, so
+pointing both roles at, say, the same Llama through OpenRouter and Groq passes
+while giving you no independence at all. Responses are
 cached under `data/agent_cache`, which lets a demo run offline and is what makes
 a reported number reproducible against a model that may drift.
 

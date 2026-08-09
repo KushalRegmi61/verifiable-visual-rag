@@ -87,6 +87,44 @@ def test_the_startup_check_compares_the_id_the_agent_compares(monkeypatch):
     assert make_chat("reader", settings).model_id == model_id_for("reader", settings)
 
 
+def test_the_id_pin_holds_for_an_openai_compatible_gateway_too(monkeypatch):
+    """The compatible provider derives its id from the endpoint host, not from
+    the provider string, so it is the case where the startup check and the
+    client are most likely to drift."""
+    pytest.importorskip("langchain_openai")
+    from visual_verify.agent.models import make_chat
+
+    monkeypatch.setenv("VVRAG_VERIFIER_API_KEY", "not-a-real-key")
+    settings = Settings(
+        qdrant_url=":memory:",
+        verifier_provider="openai_compatible",
+        verifier_model="llama-4-scout",
+        verifier_base_url="https://openrouter.ai/api/v1",
+    )
+
+    assert make_chat("verifier", settings).model_id == model_id_for("verifier", settings)
+    assert model_id_for("verifier", settings) == "openrouter.ai:llama-4-scout"
+
+
+def test_two_gateways_serving_the_same_model_name_are_not_the_same_model():
+    """Reader on one gateway and verifier on another, both running a model of
+    the same name, is a self-preference risk the id cannot see: it is the same
+    weights twice. The startup check compares ids, so this pair is ALLOWED, and
+    that limit is recorded here rather than left to be discovered."""
+    settings = Settings(
+        qdrant_url=":memory:",
+        reader_provider="openai_compatible",
+        reader_model="llama-4-scout",
+        reader_base_url="https://openrouter.ai/api/v1",
+        verifier_provider="openai_compatible",
+        verifier_model="llama-4-scout",
+        verifier_base_url="https://api.groq.com/openai/v1",
+    )
+
+    assert model_id_for("reader", settings) != model_id_for("verifier", settings)
+    check_configuration(settings)
+
+
 def test_an_unknown_role_is_a_programming_error():
     """model_id_for mirrors make_chat's role dispatch, so it must reject the
     same inputs rather than silently formatting an empty pair."""

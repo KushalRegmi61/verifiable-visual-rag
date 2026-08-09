@@ -20,7 +20,49 @@ from visual_verify.config import Settings
 S = TypeVar("S", bound=BaseModel)
 
 # Environment variable each provider's client library reads for its key.
+# `openai_compatible` is deliberately absent: its key is per role, because the
+# reader and the verifier are expected to sit behind DIFFERENT gateways.
 _KEY_VAR = {"openai": "OPENAI_API_KEY", "google": "GOOGLE_API_KEY"}
+
+# Any OpenAI-shaped endpoint: OpenRouter, Groq, Together, DeepSeek, a local
+# vLLM or Ollama. Served by langchain_openai with a base_url, so it adds no
+# dependency. This is what makes the vendor an environment variable instead of
+# a code change, which matters because pillar 3 rests on the reader and the
+# verifier coming from different model families and a single-vendor outage
+# would otherwise force them onto one.
+COMPATIBLE = "openai_compatible"
+
+PROVIDERS = (*sorted(_KEY_VAR), COMPATIBLE)
+
+
+def _role_var(role: str, suffix: str) -> str:
+    return f"VVRAG_{role.upper()}_{suffix}"
+
+
+def endpoint_label(base_url: str) -> str:
+    """The host of `base_url`, used in the model id.
+
+    The id goes into the response cache key, so two gateways serving the same
+    model NAME must not collide: they are different weights behind an identical
+    string, and a cache hit across them would attribute one vendor's answer to
+    another. The host disambiguates them and stays readable in a cache path,
+    which a full URL with a key in it would not.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    return parsed.netloc or parsed.path.strip("/") or base_url
+
+
+def model_id(provider: str, model: str, base_url: str | None) -> str:
+    """The identity answer() compares and the cache keys on.
+
+    Kept as a free function so `Settings` can be turned into an id without
+    building a client, which needs LangChain installed and a key present.
+    """
+    if provider == COMPATIBLE and base_url:
+        return f"{endpoint_label(base_url)}:{model}"
+    return f"{provider}:{model}"
 
 
 class UnknownProvider(RuntimeError):
@@ -34,8 +76,10 @@ class MissingApiKey(RuntimeError):
 class LangChainChat:
     """StructuredChat backed by a LangChain chat model."""
 
-    def __init__(self, provider: str, model: str) -> None:
-        self._model_id = f"{provider}:{model}"
+    def __init__(
+        self, provider: str, model: str, base_url: str | None = None, api_key: str | None = None
+    ) -> None:
+        self._model_id = model_id(provider, model, base_url)
         if provider == "openai":
             from langchain_openai import ChatOpenAI
 
@@ -44,6 +88,18 @@ class LangChainChat:
             from langchain_google_genai import ChatGoogleGenerativeAI
 
             self._llm = ChatGoogleGenerativeAI(model=model, temperature=0)
+        elif provider == COMPATIBLE:
+            from langchain_openai import ChatOpenAI
+
+            # Same client class as "openai", pointed elsewhere. The gateway has
+            # to speak the OpenAI chat-completions shape, because structured()
+            # sends the page as an OpenAI-style image_url content block and
+            # relies on with_structured_output, which needs tool calling or a
+            # native JSON-schema mode. A gateway lacking either degrades to
+            # prompt-and-parse, which is the correctly-shaped wrong output this
+            # whole layer exists to prevent. Pick a vision model that supports
+            # tools, and confirm it on a real call rather than assuming.
+            self._llm = ChatOpenAI(model=model, temperature=0, base_url=base_url, api_key=api_key)
         else:  # pragma: no cover - guarded by make_chat
             raise UnknownProvider(provider)
 
@@ -78,10 +134,26 @@ def make_chat(role: str, settings: Settings) -> LangChainChat:
     else:
         raise ValueError(f"role must be 'reader' or 'verifier', got {role!r}")
 
-    if provider not in _KEY_VAR:
+    if provider not in PROVIDERS:
         raise UnknownProvider(
-            f"VVRAG_{role.upper()}_PROVIDER is {provider!r}; expected one of {sorted(_KEY_VAR)}"
+            f"{_role_var(role, 'PROVIDER')} is {provider!r}; expected one of {list(PROVIDERS)}"
         )
+
+    if provider == COMPATIBLE:
+        base_url = settings.reader_base_url if role == "reader" else settings.verifier_base_url
+        if not base_url:
+            raise UnknownProvider(
+                f"{_role_var(role, 'PROVIDER')} is {COMPATIBLE!r} but "
+                f"{_role_var(role, 'BASE_URL')} is not set, so there is no endpoint to call"
+            )
+        key_var = _role_var(role, "API_KEY")
+        api_key = os.getenv(key_var)
+        if not api_key:
+            raise MissingApiKey(
+                f"{key_var} is not set, which the {role} needs to reach {endpoint_label(base_url)}"
+            )
+        return LangChainChat(provider, model, base_url=base_url, api_key=api_key)
+
     key_var = _KEY_VAR[provider]
     if not os.getenv(key_var):
         raise MissingApiKey(f"{key_var} is not set, which the {role} needs to reach {provider}")

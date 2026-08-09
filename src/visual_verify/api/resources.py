@@ -33,18 +33,24 @@ class StartupRefused(RuntimeError):
 def model_id_for(role: str, settings: Settings) -> str:
     """The id answer() compares, derived from settings without building a client.
 
-    Must stay identical to LangChainChat's `f"{provider}:{model}"`. It is
-    duplicated rather than imported because constructing a LangChainChat needs
-    LangChain installed and an API key present, which is exactly what a
-    configuration check must work without. test_api_resources.py pins the two
-    together by building a real client and comparing, so a change to the id
-    format fails there rather than silently splitting the startup check from
-    the check it is supposed to anticipate.
+    Delegates to agent.models.model_id, which LangChainChat also uses, so the
+    two cannot drift. It used to re-spell `f"{provider}:{model}"` here, and that
+    was survivable only while the format was one line: the openai_compatible
+    provider derives its id from the endpoint host instead, and a second
+    hand-written copy would have let a config pass startup that answer() then
+    rejected on the first question.
+
+    Importing agent.models is safe without LangChain installed, because that
+    module's LangChain imports are all function-local.
     """
+    from visual_verify.agent.models import model_id
+
     if role == "reader":
-        return f"{settings.reader_provider}:{settings.reader_model}"
+        return model_id(settings.reader_provider, settings.reader_model, settings.reader_base_url)
     if role == "verifier":
-        return f"{settings.verifier_provider}:{settings.verifier_model}"
+        return model_id(
+            settings.verifier_provider, settings.verifier_model, settings.verifier_base_url
+        )
     raise ValueError(f"role must be 'reader' or 'verifier', got {role!r}")
 
 

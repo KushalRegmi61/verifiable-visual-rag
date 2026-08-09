@@ -31,6 +31,13 @@ class Settings:
     reader_model: str = "gpt-4o"
     verifier_provider: str = "google"
     verifier_model: str = "gemini-2.0-flash"
+    # Only for the `openai_compatible` provider: the endpoint an OpenAI-shaped
+    # gateway serves. This is what makes the vendor a runtime choice rather than
+    # a code change, so a project with no Gemini credit can point the verifier
+    # at a different family and keep the reader and verifier genuinely
+    # independent, which is the whole reason S5 uses two of them.
+    reader_base_url: str | None = None
+    verifier_base_url: str | None = None
     # Derived from the rubric's "supported" floor, not repeated as a literal;
     # see rubric.SUPPORTED_FLOOR for why 6.0 is the number and why it must
     # stay derived rather than hand-copied here and in core.DEFAULT_THRESHOLD.
@@ -51,6 +58,8 @@ class Settings:
             reader_model=os.getenv("VVRAG_READER_MODEL", "gpt-4o"),
             verifier_provider=os.getenv("VVRAG_VERIFIER_PROVIDER", "google"),
             verifier_model=os.getenv("VVRAG_VERIFIER_MODEL", "gemini-2.0-flash"),
+            reader_base_url=os.getenv("VVRAG_READER_BASE_URL"),
+            verifier_base_url=os.getenv("VVRAG_VERIFIER_BASE_URL"),
             abstain_threshold=float(os.getenv("VVRAG_ABSTAIN_THRESHOLD", str(SUPPORTED_FLOOR))),
         )
 
