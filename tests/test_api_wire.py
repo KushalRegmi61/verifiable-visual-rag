@@ -117,3 +117,30 @@ def test_done_counts_use_shown_not_the_abstained_flag():
     _, payload = to_frame(complete)
 
     assert payload["shown"] == 0
+
+
+def test_a_retrieved_event_names_the_page_and_the_alternatives():
+    from pathlib import Path
+
+    from visual_verify.api.ask import Retrieved
+    from visual_verify.contracts import RetrievedPage
+    from visual_verify.prepare import PreparedPage
+
+    prepared = PreparedPage(
+        doc_sha="abc123",
+        doc_name="proposal.pdf",
+        page_no=3,
+        image_path=Path("p.png"),
+        boxes=[],
+        page_vectors=None,
+        grid=None,
+    )
+    other = RetrievedPage(doc_id="abc123", page=7, image_ref="p7.png", score=8.1)
+
+    name, payload = to_frame(Retrieved(page=prepared, score=9.4, candidates=[other]))
+
+    assert name == "retrieved"
+    assert payload["doc_sha"] == "abc123"
+    assert payload["page"] == 3
+    assert payload["score"] == 9.4
+    assert payload["candidates"] == [{"doc_sha": "abc123", "page": 7, "score": 8.1}]

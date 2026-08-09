@@ -12,7 +12,6 @@ place for the rule is where the data crosses out of the process.
 
 from visual_verify.agent.events import (
     AnswerComplete,
-    AnswerEvent,
     ClaimsProduced,
     ClaimVerified,
     ReadingStarted,
@@ -50,8 +49,24 @@ def _claim(index: int, c: Claim) -> dict:
     }
 
 
-def to_frame(event: AnswerEvent) -> tuple[str, dict]:
+def to_frame(event) -> tuple[str, dict]:
     """(event name, payload) for one event."""
+    # Function-local import: ask.py imports prepare.py, which imports
+    # SQLAlchemy. At module scope that would drag the store into every import
+    # of this module, and tests/test_api_wire.py would stop being a pure unit
+    # test of the region strip.
+    from visual_verify.api.ask import Retrieved
+
+    if isinstance(event, Retrieved):
+        return "retrieved", {
+            "doc_sha": event.page.doc_sha,
+            "doc_name": event.page.doc_name,
+            "page": event.page.page_no,
+            "score": event.score,
+            "candidates": [
+                {"doc_sha": c.doc_id, "page": c.page, "score": c.score} for c in event.candidates
+            ],
+        }
     if isinstance(event, ReadingStarted):
         return "reading", {}
     if isinstance(event, ClaimsProduced):
