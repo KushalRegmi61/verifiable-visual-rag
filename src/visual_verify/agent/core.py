@@ -13,8 +13,8 @@ claims, by contrast, are yielded one at a time by `answer_stream`, which is
 safe precisely because each one has already been judged.
 """
 
-from collections.abc import Callable, Iterator
-from pathlib import Path
+from collections.abc import Callable, Iterator, Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -29,10 +29,17 @@ from visual_verify.agent.reader import is_compound, read, shares_a_term
 from visual_verify.agent.rubric import SUPPORTED_FLOOR, abstention_score
 from visual_verify.agent.types import StructuredChat
 from visual_verify.agent.verifier import verify
-from visual_verify.contracts import Answer, Claim
+from visual_verify.contracts import Answer, Claim, GroundedRegion
 from visual_verify.grounding import GroundingError, ground
-from visual_verify.ingest.boxes import BoxRecord
-from visual_verify.retrieval.geometry import PatchGrid
+
+if TYPE_CHECKING:
+    # Type-checking only, and it must stay that way. visual_verify.prepare
+    # imports SQLAlchemy, and tests/test_core_is_light.py asserts that
+    # importing visual_verify.agent drags in no store dependency, so a
+    # module-scope import here would fail the suite rather than this file.
+    # Nothing at runtime needs the class: this module only reads attributes
+    # off whatever it is handed.
+    from visual_verify.prepare import PreparedPage
 
 # The 'supported' floor. Derived from the rubric, not repeated as a literal,
 # so this and Settings.abstain_threshold's default cannot drift apart.
@@ -43,18 +50,86 @@ class AgentError(RuntimeError):
     """A configuration that would invalidate the verification."""
 
 
+def _best_region(
+    claim: str,
+    pages: Sequence["PreparedPage"],
+    query_vectors: np.ndarray | None,
+) -> tuple["PreparedPage", list[GroundedRegion]]:
+    """The strongest region for `claim` across every prepared page.
+
+    Text first, everywhere, because an exact span match is not a score on the
+    same scale as MaxSim and beats it categorically. A text region's `score`
+    comes from span matching and a visual one's from a MaxSim mean over patch
+    embeddings, so `max()` over the two together compares nothing: an
+    arbitrarily confident visual region on page 1 would outrank the page where
+    the claim is written out word for word, and the answer would cite a box
+    that merely looks busy. Ties break by retrieval order, which is why `pages`
+    must stay ranked and must not be sorted here.
+
+    Only when NO page yields a text region do visual scores compete, and those
+    ARE the same quantity across pages, so comparing them is sound.
+
+    Returns (page, regions). Regions is empty when nothing was found, which is
+    the same meaning ground() gives it. The page returned alongside is the one
+    whose image must go to the verifier: verify() takes ONE image, and judging
+    a page-3 region against the page-1 image asks it to check a box that is not
+    in front of it, which is a fabricated citation reached by another route.
+    """
+    for page in pages:
+        # force="text" cannot raise GroundingError. It returns before the
+        # vector check, which is the only thing that raises, so a page with no
+        # embeddings still gets its text layer searched here.
+        found = ground(claim, page.boxes, page=page.page_no, force="text")
+        if found:
+            return page, found
+
+    best_page: PreparedPage | None = None
+    best_regions: list[GroundedRegion] = []
+    best_score = 0.0
+    for page in pages:
+        try:
+            # Unforced rather than force="visual". The text pass above already
+            # came back empty for every page, so this repeats a search that
+            # cannot succeed and then falls through to the heatmap; keeping it
+            # unforced means this loop asks for "the best region ground() can
+            # find", which is the same question the single-page caller asked
+            # before pages became a list.
+            regions = ground(
+                claim,
+                page.boxes,
+                page=page.page_no,
+                page_vectors=page.page_vectors,
+                query_vectors=query_vectors,
+                grid=page.grid,
+            )
+        except GroundingError:
+            # Per page, never around the loop. This is raised when the visual
+            # path has no vectors, which is exactly what a page that was
+            # ingested but never embedded looks like. Letting it escape would
+            # make one unembedded page discard the evidence sitting on the
+            # other two, and the answer would report insufficient_evidence with
+            # nothing anywhere saying why.
+            continue
+        if regions and (best_page is None or max(r.score for r in regions) > best_score):
+            best_page, best_regions = page, regions
+            best_score = max(r.score for r in regions)
+
+    if best_page is not None:
+        return best_page, best_regions
+    # No evidence anywhere. The top page is returned so the verifier still has
+    # an image to look at and can say insufficient_evidence about the page the
+    # user is looking at, rather than about no page at all.
+    return pages[0], []
+
+
 def answer_stream(
     question: str,
-    image_path: Path,
-    boxes: list[BoxRecord],
+    pages: Sequence["PreparedPage"],
     *,
-    page: int,
     reader_chat: StructuredChat,
     verifier_chat: StructuredChat,
     threshold: float = DEFAULT_THRESHOLD,
-    page_vectors: np.ndarray | None = None,
     embed_query: Callable[[str], np.ndarray] | None = None,
-    grid: PatchGrid | None = None,
 ) -> Iterator[AnswerEvent]:
     """The loop, yielding as each claim is judged. See answer() for the arguments.
 
@@ -83,67 +158,61 @@ def answer_stream(
             "a model grading its own output is biased toward it, which is the "
             "reason this slice uses two providers"
         )
+    # Eager, for the same reason the model guard above is: with no page there
+    # is nothing to read and nothing to ground against, and discovering that on
+    # first advance would surface it as an SSE error frame after a 200 rather
+    # than as a refusal to start.
+    if not pages:
+        raise AgentError("no pages were prepared; there is nothing to read")
 
     return _answer_events(
         question,
-        image_path,
-        boxes,
-        page=page,
+        pages,
         reader_chat=reader_chat,
         verifier_chat=verifier_chat,
         threshold=threshold,
-        page_vectors=page_vectors,
         embed_query=embed_query,
-        grid=grid,
     )
 
 
 def _answer_events(
     question: str,
-    image_path: Path,
-    boxes: list[BoxRecord],
+    pages: Sequence["PreparedPage"],
     *,
-    page: int,
     reader_chat: StructuredChat,
     verifier_chat: StructuredChat,
     threshold: float,
-    page_vectors: np.ndarray | None,
     embed_query: Callable[[str], np.ndarray] | None,
-    grid: PatchGrid | None,
 ) -> Iterator[AnswerEvent]:
     """The generator half of answer_stream(). Preconditions already checked."""
     yield ReadingStarted()
-    drafted = read(reader_chat, image_path, question)
+    # Every page, in retrieval order. The reader answers from what it can see,
+    # so a page withheld here is evidence the answer can never reach.
+    drafted = read(reader_chat, [p.image_path for p in pages], question)
     yield ClaimsProduced(n=len(drafted))
 
     claims: list[Claim] = []
     for index, draft in enumerate(drafted):
         text = draft.text
+        # Once per claim, not once per page: the query vector depends only on
+        # the claim, and embedding it again for each page would pay a
+        # multi-second GPU call for an identical array.
         query_vectors = embed_query(text) if embed_query is not None else None
-        try:
-            regions = ground(
-                text,
-                boxes,
-                page=page,
-                page_vectors=page_vectors,
-                query_vectors=query_vectors,
-                grid=grid,
-            )
-        except GroundingError:
-            # A reader model paraphrases by default, so a claim that is not
-            # findable verbatim and has no visual path to fall back on (no
-            # vectors supplied) is the EXPECTED case, not an edge one. Losing
-            # every already-verified claim, after paying for the API calls
-            # that produced them, is worse than one claim arriving with no
-            # evidence: the verifier still runs, empty regions in hand, and
-            # the rubric's insufficient_evidence label makes the gap visible
-            # instead of raising a traceback that discards the whole answer.
-            #
-            # This is NOT swallowing a configuration error. If grounding is
-            # unusable for every claim (no vectors ever supplied and nothing
-            # in the text layer matches), the visible result is an answer
-            # where every claim is insufficiently evidenced, not a crash.
-            regions = []
+        # GroundingError is caught inside _best_region, per page. A reader
+        # model paraphrases by default, so a claim that is not findable
+        # verbatim and has no visual path to fall back on (no vectors on any
+        # page) is the EXPECTED case, not an edge one. Losing every
+        # already-verified claim, after paying for the API calls that produced
+        # them, is worse than one claim arriving with no evidence: the verifier
+        # still runs, empty regions in hand, and the rubric's
+        # insufficient_evidence label makes the gap visible instead of raising
+        # a traceback that discards the whole answer.
+        #
+        # This is NOT swallowing a configuration error. If grounding is
+        # unusable for every claim (no vectors ever supplied and nothing in the
+        # text layer matches), the visible result is an answer where every
+        # claim is insufficiently evidenced, not a crash.
+        source, regions = _best_region(text, pages, query_vectors)
 
         # Drop a region whose text names nothing the claim names. This is
         # applied HERE and not inside ground() on purpose: ground()'s contract
@@ -170,7 +239,13 @@ def _answer_events(
         cited = [r for r in regions if shares_a_term(text, r.text)]
         regions = cited
 
-        verdict = verify(verifier_chat, image_path, text, regions)
+        # The winning page's image, never pages[0]'s. verify() takes ONE image
+        # and is asked whether the listed boxes support the claim, so handing
+        # it the top page while the region sits on page 3 asks it to check a
+        # box that is not in the picture. It would answer anyway, from the
+        # claim's own plausibility, and a citation nobody can see would come
+        # back supported.
+        verdict = verify(verifier_chat, source.image_path, text, regions)
         score = abstention_score(verdict.label, verdict.confidence)
         claim = Claim(
             text=text,
@@ -210,18 +285,25 @@ def _answer_events(
 
 def answer(
     question: str,
-    image_path: Path,
-    boxes: list[BoxRecord],
+    pages: Sequence["PreparedPage"],
     *,
-    page: int,
     reader_chat: StructuredChat,
     verifier_chat: StructuredChat,
     threshold: float = DEFAULT_THRESHOLD,
-    page_vectors: np.ndarray | None = None,
     embed_query: Callable[[str], np.ndarray] | None = None,
-    grid: PatchGrid | None = None,
 ) -> Answer:
-    """Answer `question` from one page, with every claim judged before it shows.
+    """Answer `question` from these pages, with every claim judged before it shows.
+
+    `pages` is ranked, top hit first, and must stay that way: grounding breaks
+    ties between pages by this order, so sorting it by page number would
+    silently change which page a claim is cited to and the answer would still
+    look perfectly ordinary. Passing `[one_page]` is the pinned-page case and
+    is not a special path.
+
+    The image path, boxes, vectors, and patch grid all ride on the PreparedPage
+    they describe. They used to be five parallel arguments, which meant a
+    caller could hand over page 4's boxes with page 7's grid and get boxes
+    placed off-page with every shape and dtype still looking right.
 
     `threshold` is a parameter, not a constant, because S7 sweeps it to produce
     the confident-wrong against coverage curve. A hardcoded value would make the
@@ -229,26 +311,21 @@ def answer(
 
     `embed_query` rather than a precomputed vector: there is one reader-produced
     claim per grounding call, not one for the whole answer, so the query vector
-    has to be recomputed per claim. `page_vectors` and `grid` describe the page
-    and stay fixed across claims; only the query changes. The caller loads the
-    embedder once and passes its bound `embed_query` method, so the model is
-    loaded once per command, not once per claim.
+    has to be recomputed per claim. The pages stay fixed across claims; only the
+    query changes. The caller loads the embedder once and passes its bound
+    `embed_query` method, so the model is loaded once per command, not once per
+    claim.
 
     A thin drain over answer_stream(). The loop lives there so a streaming
-    consumer and this one cannot diverge; this signature and return type are
-    unchanged, which is what keeps `vvrag ask` and S7's harness working.
+    consumer and this one cannot diverge.
     """
     for event in answer_stream(
         question,
-        image_path,
-        boxes,
-        page=page,
+        pages,
         reader_chat=reader_chat,
         verifier_chat=verifier_chat,
         threshold=threshold,
-        page_vectors=page_vectors,
         embed_query=embed_query,
-        grid=grid,
     ):
         if isinstance(event, AnswerComplete):
             return event.answer

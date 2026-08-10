@@ -9,6 +9,26 @@ from visual_verify.agent import AgentError, answer
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.agent.types import FakeChat
 from visual_verify.ingest.boxes import BoxRecord
+from visual_verify.prepare import PreparedPage
+
+
+def prepared(boxes, *, page=0, image="p.png", vectors=None, grid=None):
+    """One PreparedPage, the real class the service and the CLI both build.
+
+    answer() takes a ranked list of pages rather than five parallel arguments,
+    so the image, the boxes, the vectors and the grid can no longer come from
+    different pages. A list of one is the pinned-page case `vvrag ask` uses and
+    is not a special path.
+    """
+    return PreparedPage(
+        doc_sha="0" * 64,
+        doc_name="doc.pdf",
+        page_no=page,
+        image_path=Path(image),
+        boxes=boxes,
+        page_vectors=vectors,
+        grid=grid,
+    )
 
 
 def word(x0, y0, x1, y1, text, word_no=0):
@@ -58,9 +78,7 @@ def test_a_supported_claim_is_shown_with_its_regions():
 
     out = answer(
         "What happened?",
-        Path("p.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes())],
         reader_chat=reader,
         verifier_chat=verifier,
     )
@@ -79,9 +97,7 @@ def test_an_unsupported_claim_is_abstained_on():
     reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="unsupported", confidence=0.9, reason="no")])
 
-    out = answer(
-        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
-    )
+    out = answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert out.claims[0].abstained is True
     assert out.claims[0].label == "unsupported"
@@ -92,9 +108,7 @@ def test_a_partially_supported_claim_is_abstained_on_at_the_default_threshold():
     reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="partially_supported", confidence=1.0, reason="half")])
 
-    out = answer(
-        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
-    )
+    out = answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert out.claims[0].abstained is True
 
@@ -107,9 +121,7 @@ def test_lowering_the_threshold_admits_a_partially_supported_claim():
 
     out = answer(
         "q",
-        Path("p.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes())],
         threshold=4.0,
         reader_chat=reader,
         verifier_chat=verifier,
@@ -128,7 +140,7 @@ def test_every_claim_reaching_the_verifier_gets_one_call():
         ],
     )
 
-    answer("q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier)
+    answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert len(verifier.calls) == 2
 
@@ -137,9 +149,7 @@ def test_a_reader_returning_nothing_abstains_overall():
     reader = FakeChat("r", [ClaimList(claims=[])])
     verifier = FakeChat("v", [])
 
-    out = answer(
-        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
-    )
+    out = answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert out.claims == []
     assert out.abstained_overall is True
@@ -150,9 +160,7 @@ def test_all_claims_abstained_means_abstained_overall():
     reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="unsupported", confidence=0.9, reason="no")])
 
-    out = answer(
-        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
-    )
+    out = answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert out.abstained_overall is True
 
@@ -170,9 +178,7 @@ def test_a_compound_claim_is_flagged_but_still_shown_and_verified():
 
     out = answer(
         "What happened?",
-        Path("p.png"),
-        boxes,
-        page=0,
+        [prepared(boxes)],
         reader_chat=reader,
         verifier_chat=verifier,
     )
@@ -192,7 +198,7 @@ def test_the_same_model_for_both_roles_is_refused():
     other = FakeChat("openai:gpt-4o", [Verdict(label="supported", confidence=0.9, reason="r")])
 
     with pytest.raises(AgentError, match="same model"):
-        answer("q", Path("p.png"), page_boxes(), page=0, reader_chat=same, verifier_chat=other)
+        answer("q", [prepared(page_boxes())], reader_chat=same, verifier_chat=other)
 
 
 def test_a_claim_that_cannot_be_grounded_does_not_abort_the_whole_answer():
@@ -215,9 +221,7 @@ def test_a_claim_that_cannot_be_grounded_does_not_abort_the_whole_answer():
         ],
     )
 
-    out = answer(
-        "q", Path("p.png"), page_boxes(), page=0, reader_chat=reader, verifier_chat=verifier
-    )
+    out = answer("q", [prepared(page_boxes())], reader_chat=reader, verifier_chat=verifier)
 
     assert len(out.claims) == 2
     grounded, ungroundable = out.claims
@@ -237,9 +241,7 @@ def test_answer_carries_the_verifier_reason_onto_the_claim():
 
     out = answer(
         "What happened?",
-        Path("p.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes())],
         reader_chat=reader,
         verifier_chat=verifier,
     )

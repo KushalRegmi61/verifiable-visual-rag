@@ -589,15 +589,14 @@ def cmd_ask(args: argparse.Namespace) -> int:
     try:
         result = answer(
             args.question,
-            prepared.image_path,
-            prepared.boxes,
-            page=prepared.page_no,
+            # One page, because `vvrag ask` takes one page number. The service
+            # passes the whole retrieved run; a list of one is the same path,
+            # not a special case.
+            [prepared],
             reader_chat=reader,
             verifier_chat=verifier,
             threshold=args.threshold,
-            page_vectors=prepared.page_vectors,
             embed_query=embedder.embed_query if embedder is not None else None,
-            grid=prepared.grid,
         )
     except AgentError as exc:
         print(f"cannot answer: {exc}")

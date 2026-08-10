@@ -13,22 +13,37 @@ from visual_verify.agent.types import FakeChat
 
 def test_read_returns_the_models_claims():
     chat = FakeChat("m", [claim_list("Revenue grew.", "Margins held.")])
-    claims = read(chat, Path("page.png"), "What happened?")
+    claims = read(chat, [Path("page.png")], "What happened?")
     assert [c.text for c in claims] == ["Revenue grew.", "Margins held."]
 
 
 def test_read_sends_the_question_and_the_page_image():
     chat = FakeChat("m", [claim_list("a")])
-    read(chat, Path("page.png"), "What is the threshold?")
+    read(chat, [Path("page.png")], "What is the threshold?")
 
     call = chat.calls[0]
     assert "What is the threshold?" in call.prompt
     assert call.image_paths == [Path("page.png")]
 
 
+def test_read_sends_every_page_it_was_given_in_order():
+    """The reader sees the top pages of the document, not just the first.
+
+    Dropping a page here does not raise and does not look wrong: the answer
+    stays fluent, it simply never mentions what was on the page that was left
+    out, and every claim it does draft still grounds and still verifies. Order
+    is retrieval order and is asserted, because the pages are the model's only
+    context and a shuffled one changes which page it leans on.
+    """
+    chat = FakeChat("m", [claim_list("a")])
+    read(chat, [Path("p0.png"), Path("p1.png"), Path("p2.png")], "q")
+
+    assert chat.calls[0].image_paths == [Path("p0.png"), Path("p1.png"), Path("p2.png")]
+
+
 def test_read_returns_an_empty_list_when_the_page_answers_nothing():
     chat = FakeChat("m", [ClaimList(claims=[])])
-    assert read(chat, Path("page.png"), "unrelated question") == []
+    assert read(chat, [Path("page.png")], "unrelated question") == []
 
 
 def test_a_conjunction_joined_claim_is_flagged_as_compound():
@@ -288,7 +303,7 @@ def test_read_warns_when_the_model_returned_bare_strings():
     chat = FakeChat("m", [ClaimList(claims=["Revenue grew.", "Margins held."])])
 
     with pytest.warns(UserWarning, match="bare strings"):
-        claims = read(chat, Path("page.png"), "What happened?")
+        claims = read(chat, [Path("page.png")], "What happened?")
 
     # Warned, never refused: a single-paragraph answer is still an answer.
     assert [c.text for c in claims] == ["Revenue grew.", "Margins held."]
@@ -312,7 +327,7 @@ def test_read_does_not_warn_on_properly_shaped_output():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        claims = read(chat, Path("page.png"), "What happened?")
+        claims = read(chat, [Path("page.png")], "What happened?")
 
     assert claims[1].starts_paragraph is True
 

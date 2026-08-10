@@ -17,6 +17,26 @@ from visual_verify.agent.reader import shares_a_term
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.agent.types import FakeChat
 from visual_verify.ingest.boxes import BoxRecord
+from visual_verify.prepare import PreparedPage
+
+
+def prepared(boxes, *, page=0, image="p.png", vectors=None, grid=None):
+    """One PreparedPage, the real class the service and the CLI both build.
+
+    The real dataclass rather than a stand-in, because the whole point of the
+    argument becoming a page object is that the image, the boxes, the vectors
+    and the grid travel together; a test double with the same five attributes
+    would keep passing if they were ever pulled apart again.
+    """
+    return PreparedPage(
+        doc_sha="0" * 64,
+        doc_name="doc.pdf",
+        page_no=page,
+        image_path=Path(image),
+        boxes=boxes,
+        page_vectors=vectors,
+        grid=grid,
+    )
 
 
 def page_boxes():
@@ -80,9 +100,7 @@ def run_stream():
     return list(
         answer_stream(
             "What happened?",
-            Path("p.png"),
-            page_boxes(),
-            page=0,
+            [prepared(page_boxes())],
             reader_chat=reader,
             verifier_chat=verifier,
         )
@@ -123,9 +141,7 @@ def test_answer_returns_exactly_what_the_stream_finished_with():
     reader, verifier = script()
     direct = answer(
         "What happened?",
-        Path("p.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes())],
         reader_chat=reader,
         verifier_chat=verifier,
     )
@@ -152,9 +168,7 @@ def test_the_same_model_guard_raises_before_anything_is_iterated():
     with pytest.raises(AgentError):
         answer_stream(
             "q",
-            Path("p.png"),
-            page_boxes(),
-            page=0,
+            [prepared(page_boxes())],
             reader_chat=same,
             verifier_chat=other,
         )
@@ -167,9 +181,7 @@ def test_a_reader_that_returns_nothing_reports_a_count_of_zero():
     events = list(
         answer_stream(
             "q",
-            Path("p.png"),
-            page_boxes(),
-            page=0,
+            [prepared(page_boxes())],
             reader_chat=reader,
             verifier_chat=verifier,
         )
@@ -216,9 +228,7 @@ def test_the_paragraph_break_survives_the_trip_from_reader_to_claim():
 
     out = answer(
         "What happened?",
-        Path("p.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes())],
         reader_chat=reader,
         verifier_chat=verifier,
     )
@@ -277,15 +287,11 @@ def test_a_non_sequitur_region_reaches_the_verifier_as_no_evidence():
 
     out = answer(
         "q",
-        Path("page.png"),
-        page_number,
-        page=0,
+        [prepared(page_number, image="page.png", vectors=page_vectors, grid=grid)],
         reader_chat=reader,
         verifier_chat=verifier,
         threshold=0.0,
-        page_vectors=page_vectors,
         embed_query=lambda _: np.ones((2, 8), dtype=np.float32),
-        grid=grid,
     )
 
     prompt = verifier.calls[0].prompt
@@ -318,9 +324,7 @@ def test_a_region_that_names_nothing_in_the_claim_is_not_cited():
 
     out = answer(
         "q",
-        Path("page.png"),
-        page_boxes(),
-        page=0,
+        [prepared(page_boxes(), image="page.png")],
         reader_chat=reader,
         verifier_chat=verifier,
         threshold=0.0,
@@ -393,15 +397,18 @@ def test_a_claim_with_no_region_is_withheld_whatever_the_verifier_said():
 
     out = answer(
         "q",
-        Path("page.png"),
-        page_number,
-        page=0,
+        [
+            prepared(
+                page_number,
+                image="page.png",
+                vectors=np.ones((16, 8), dtype=np.float32),
+                grid=PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16),
+            )
+        ],
         reader_chat=reader,
         verifier_chat=verifier,
         threshold=0.0,
-        page_vectors=np.ones((16, 8), dtype=np.float32),
         embed_query=lambda _: np.ones((2, 8), dtype=np.float32),
-        grid=PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16),
     )
 
     claim = out.claims[0]
@@ -409,3 +416,247 @@ def test_a_claim_with_no_region_is_withheld_whatever_the_verifier_said():
     assert claim.label == "supported", "the verifier's raw verdict must survive for S7"
     assert claim.withheld is True, "a claim with no evidence must not be displayable"
     assert out.shown == []
+
+
+def _visual_page(word_text, *, page, image, magnitude=1.0):
+    """A page whose ONLY route to a region is the heatmap.
+
+    One word, so nothing on it matches a whole claim verbatim and the text path
+    comes back empty, and vectors scaled by `magnitude` so two such pages have
+    genuinely different MaxSim scores rather than a tie broken by iteration
+    order. The word shares a term with the claims used below on purpose: a
+    region that names nothing the claim names is dropped by the citation
+    filter, and a test whose wrong answer is filtered away silently stops
+    testing the thing it is named for.
+    """
+    import numpy as np
+
+    from visual_verify.retrieval.geometry import PatchGrid
+
+    box = BoxRecord(
+        kind="word",
+        x0=0.4,
+        y0=0.9,
+        x1=0.6,
+        y1=0.95,
+        text=word_text,
+        block_no=0,
+        line_no=0,
+        word_no=0,
+    )
+    return prepared(
+        [box],
+        page=page,
+        image=image,
+        vectors=np.full((16, 8), magnitude, dtype=np.float32),
+        grid=PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16),
+    )
+
+
+def _ones_query(_claim):
+    import numpy as np
+
+    return np.ones((2, 8), dtype=np.float32)
+
+
+def test_a_text_hit_on_a_later_page_beats_a_visual_hit_on_the_first():
+    """Score scales are not comparable. A text-path region's score comes from
+    span matching and a visual one's from MaxSim, so max() across both is
+    meaningless. An exact match wins outright wherever it is.
+
+    Deliberately rigged so the two are not merely different but INVERTED. The
+    text region scores EXACT = 1.0; the visual region here scores 8.0, because
+    relevance is a raw dot product and these vectors are not unit-norm. A
+    max() over the pooled list therefore cites page 0's page-number-sized box
+    for a claim written out word for word on page 1, and does it while looking
+    like a confident answer.
+    """
+    visual = _visual_page("Revenue", page=0, image="page0.png")
+    textual = prepared(page_boxes(), page=1, image="page1.png")
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    out = answer(
+        "q",
+        [visual, textual],
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=_ones_query,
+    )
+
+    regions = out.claims[0].regions
+    assert regions, "the claim is on page 1 verbatim and must be cited"
+    assert [r.page for r in regions] == [1]
+    assert [r.modality for r in regions] == ["text"]
+
+
+def test_the_first_pages_visual_region_really_would_have_won_on_score():
+    """The control the test above needs to mean anything.
+
+    Without it, "page 1 was cited" is satisfied by a page 0 that produced no
+    region at all, and the ordering rule would never have been exercised. This
+    pins that page 0 does produce a region, and that its score is above the
+    text path's EXACT 1.0, so pooling the two lists and taking max() would pick
+    it.
+    """
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    out = answer(
+        "q",
+        [_visual_page("Revenue", page=0, image="page0.png")],
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=_ones_query,
+    )
+
+    regions = out.claims[0].regions
+    assert [r.modality for r in regions] == ["visual"]
+    assert regions[0].score > 1.0, "the visual score must beat EXACT for the trap to exist"
+
+
+def test_the_claim_is_verified_against_the_page_its_region_came_from():
+    """verify() takes ONE image. Handing it the top page while the region is on
+    page 3 asks it to check a box it cannot see, which is a fabricated citation
+    by a different route.
+
+    The verifier would not complain. It is shown a rectangle and a claim, and
+    with the rectangle pointing at nothing on the image in front of it, it
+    falls back on whether the claim sounds true. That is precisely how the
+    page-number citation came back supported at 0.95.
+    """
+    visual = _visual_page("Revenue", page=0, image="page0.png")
+    textual = prepared(page_boxes(), page=1, image="page1.png")
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    answer(
+        "q",
+        [visual, textual],
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=_ones_query,
+    )
+
+    assert verifier.calls[0].image_paths == [Path("page1.png")]
+
+
+def test_the_reader_sees_every_prepared_page():
+    """The whole slice is inert if it does not. A reader shown only the top
+    page writes a fluent answer that simply misses the evidence two pages
+    later, and every claim it drafts still grounds and still verifies, so
+    nothing anywhere reports a problem."""
+    pages = [
+        _visual_page("Revenue", page=0, image="page0.png"),
+        prepared(page_boxes(), page=1, image="page1.png"),
+    ]
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    answer(
+        "q",
+        pages,
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=_ones_query,
+    )
+
+    assert reader.calls[0].image_paths == [Path("page0.png"), Path("page1.png")]
+
+
+def test_visual_scores_are_compared_across_pages_when_no_page_has_a_text_hit():
+    """Once no page matches the claim in its text layer, the scores in play are
+    all MaxSim over patch embeddings, which IS one quantity, so the highest
+    wins wherever it sits.
+
+    Run twice with the magnitudes swapped between the pages. One run alone
+    cannot tell "picks the strongest" apart from "picks the first" or "picks
+    the last", and both of those are one-line mistakes.
+    """
+    for stronger in (0, 1):
+        pages = [
+            _visual_page(
+                "Revenue",
+                page=0,
+                image="page0.png",
+                magnitude=1.0 if stronger == 0 else 0.25,
+            ),
+            _visual_page(
+                "Revenue",
+                page=1,
+                image="page1.png",
+                magnitude=1.0 if stronger == 1 else 0.25,
+            ),
+        ]
+        reader = FakeChat("r", [claim_list("Margins outpaced Revenue everywhere")])
+        verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+        out = answer(
+            "q",
+            pages,
+            reader_chat=reader,
+            verifier_chat=verifier,
+            threshold=0.0,
+            embed_query=_ones_query,
+        )
+
+        regions = out.claims[0].regions
+        assert [r.page for r in regions] == [stronger]
+        assert [r.modality for r in regions] == ["visual"]
+
+
+def test_one_unembedded_page_does_not_lose_the_evidence_on_the_others():
+    """GroundingError is caught PER PAGE. It is raised when the visual path has
+    no vectors, which is exactly what a page that was ingested but never
+    embedded looks like, and a document is routinely embedded page by page. If
+    it escaped the loop, the region sitting on the embedded page would be
+    thrown away and the claim would come back insufficient_evidence with
+    nothing saying why."""
+    unembedded = prepared(
+        [
+            BoxRecord(
+                kind="word",
+                x0=0.4,
+                y0=0.9,
+                x1=0.6,
+                y1=0.95,
+                text="Revenue",
+                block_no=0,
+                line_no=0,
+                word_no=0,
+            )
+        ],
+        page=0,
+        image="page0.png",
+    )
+    embedded = _visual_page("Revenue", page=1, image="page1.png")
+    reader = FakeChat("r", [claim_list("Margins outpaced Revenue everywhere")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    out = answer(
+        "q",
+        [unembedded, embedded],
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=_ones_query,
+    )
+
+    regions = out.claims[0].regions
+    assert [r.page for r in regions] == [1]
+    assert out.claims[0].withheld is False
+
+
+def test_no_pages_is_refused_before_anything_is_read():
+    """Eagerly, like the same-model guard, and for the same reason: it reaches
+    the browser through ask_events, which has already yielded a retrieved event
+    and committed a 200."""
+    reader = FakeChat("r", [claim_list("x")])
+    verifier = FakeChat("v", [])
+
+    with pytest.raises(AgentError):
+        answer_stream("q", [], reader_chat=reader, verifier_chat=verifier)

@@ -3,9 +3,10 @@
 Deliberately plain frozen dataclasses with no HTTP, no JSON, and no knowledge
 of a transport. The API layer converts them; the eval layer ignores them.
 
-Retrieval is NOT represented here. answer_stream() is handed a page and never
-chooses one, so an event about which page won belongs to the caller that ran
-the search.
+Retrieval is NOT represented here. answer_stream() is handed the ranked pages
+and never chooses them, so an event about which pages won belongs to the caller
+that ran the search. Which of those pages a given CLAIM was cited to is a
+different question, and it rides on the region inside ClaimVerified.
 """
 
 from dataclasses import dataclass

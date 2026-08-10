@@ -1,4 +1,4 @@
-"""The reader: page image plus question, out come atomic claims.
+"""The reader: page images plus question, out come atomic claims.
 
 Claims are emitted directly as structured output rather than as prose that a
 second call splits. One API call instead of two, and the model that wrote the
@@ -15,11 +15,16 @@ from pathlib import Path
 from visual_verify.agent.schemas import ClaimList, DraftedClaim
 from visual_verify.agent.types import StructuredChat
 
-PROMPT = """You are answering a question from one page of a document, for
-someone who cannot see the page.
+PROMPT = """You are answering a question from the pages of one document, for
+someone who cannot see them.
 
-Answer only from what is visible on this page. If the page does not answer the
-question, return an empty list of claims.
+Answer only from what is visible on the pages shown. If the pages do not answer
+the question, return an empty list of claims.
+
+Do not say which page anything came from, and do not number the pages. Every
+sentence is matched back to a page and a region afterwards, by searching the
+pages themselves, so a page attributed here would be ignored at best and
+contradict the citation the reader is shown at worst.
 
 Compose the answer as connected prose, then return it as one sentence per
 claim, in the order they should be read. Every sentence is checked separately
@@ -347,8 +352,20 @@ def shares_content_word(previous: str, claim: str) -> bool:
     return bool(_content_words(previous) & _content_words(claim))
 
 
-def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
+def read(chat: StructuredChat, image_paths: list[Path], question: str) -> list[DraftedClaim]:
     """The drafted answer for `question`, one sentence per claim.
+
+    A LIST of pages, not one, and deliberately no single-path spelling left. An
+    answer to a real question routinely needs the page after the one retrieval
+    ranked first, and the symptom of the reader seeing only the top page is not
+    an error: it is a fluent answer that simply misses the evidence, or an
+    "insufficient_evidence" on a claim the document plainly supports two pages
+    later. Nothing raises and nothing looks wrong.
+
+    The reader is never asked WHICH page a claim came from. Grounding decides
+    that, per claim, by searching every page it was shown. A model that
+    misattributes would send grounding to the wrong page's boxes and produce a
+    citation drawn on an image that does not contain it.
 
     Warns when the provider returned bare strings instead of objects. The
     prompt asks for `starts_paragraph`, so bare strings mean the schema was
@@ -370,7 +387,7 @@ def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedC
     whether the response came from the cache before concluding the provider
     behaved.
     """
-    out = chat.structured(PROMPT.format(question=question), [image_path], ClaimList)
+    out = chat.structured(PROMPT.format(question=question), list(image_paths), ClaimList)
     if out.from_bare_strings:
         warnings.warn(
             f"{chat.model_id} returned claims as bare strings instead of objects, so it "

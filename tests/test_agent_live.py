@@ -39,7 +39,7 @@ def test_the_reader_returns_schema_valid_claims():
     from visual_verify.agent.reader import read
 
     chat = make_chat("reader", Settings.from_env())
-    claims = read(chat, _a_page(), "What is this page about?")
+    claims = read(chat, [_a_page()], "What is this page about?")
 
     assert isinstance(claims, list)
     assert all(c.text.strip() for c in claims)
@@ -128,7 +128,7 @@ def test_the_drafted_answer_holds_together():
     from visual_verify.agent.reader import opens_with_anaphora, read
 
     chat = make_chat("reader", Settings.from_env())
-    claims = read(chat, _a_page(), "What is this page about?")
+    claims = read(chat, [_a_page()], "What is this page about?")
 
     if not claims:
         pytest.skip("the reader found no answer on this page, which is a valid outcome")
@@ -238,7 +238,7 @@ def test_a_multi_part_answer_is_not_collapsed_into_one_claim():
     from visual_verify.agent.reader import is_compound, opens_with_anaphora, read
 
     chat = make_chat("reader", Settings.from_env())
-    claims = read(chat, _methodology_page(), "What is the evaluation methodology?")
+    claims = read(chat, [_methodology_page()], "What is the evaluation methodology?")
     texts = [c.text for c in claims]
 
     # Two, not three. Measured on 2026-08-10, five consecutive runs of this
