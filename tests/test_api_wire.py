@@ -162,9 +162,13 @@ def test_a_retrieved_event_names_the_page_and_the_alternatives():
 
 
 def test_a_retrieved_event_lists_every_page_the_reader_saw_in_order():
-    """Page numbers are deliberately NOT ascending (3, 19, 1), so a sort
-    anywhere in the path would still pass an ascending-only fixture. This
-    project has hit an ordering test blind to a sort three times already."""
+    """Page numbers are deliberately NOT ascending (3, 19, 1).
+
+    An ascending fixture cannot tell retrieval order from page order, so a sort
+    anywhere in the path would pass it. Concretely, under a sort the claim
+    grounded on page 19 would land at index 2 and the viewer would open the
+    wrong page for it, while every assertion still held.
+    """
     from pathlib import Path
 
     from visual_verify.api.ask import Retrieved
