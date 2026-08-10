@@ -90,7 +90,7 @@ _ANAPHORA = re.compile(
     r"^\s*(?:it|its|they|them|their|such|"
     r"additionally|also|furthermore|moreover|however|"
     r"therefore|hence|consequently|instead|"
-    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC}))"
+    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC})\b)"
     r")\b",
     re.IGNORECASE,
 )
@@ -112,20 +112,46 @@ def opens_with_anaphora(claim: str) -> bool:
     `\\b` matters. A prefix match would flag "Itemised costs appear in Table 2",
     where "It" is the first two letters of a word and nothing is dangling.
 
-    This is a heuristic, not a parser, and it is honest about what it misses.
-    Bare quantifier openers ("Both are scored", "Each of them") are not
-    flagged, on purpose rather than by oversight: the shape splits. "Both are
-    scored on three metrics" dangles because "both" has no noun of its own and
-    resolves against the previous sentence, but "Both variants are scored"
-    does not dangle at all, because "variants" supplies its own referent. A
-    flat word list cannot tell those two apart, so quantifiers are left out
-    rather than flagged wrong half the time. Correlatives ("The former", "The
-    latter", "Doing so") are missed for the same reason: catching them needs
-    more than a word list. `there` is deliberately EXCLUDED, not missed: it is
-    an expletive subject, not a referring pronoun, so "There are three
-    variants" is fully self-contained and flagging it would be a pure false
-    positive. As with `is_compound`, do not read "not flagged" as
-    "self-contained."
+    A demonstrative before a page noun ("This page", "this table", "this
+    figure") is exempt by design: it resolves against the image the reader is
+    looking at rather than against the predecessor, so it survives the
+    predecessor being withheld intact. Of the exempted nouns, `page`,
+    `document`, and `slide` name the one artifact in view, so the deictic
+    reading is certain. `figure`, `table`, and `chart` name visually bounded
+    objects a reader can point at, so deixis still dominates. `section` and
+    `paragraph` are not visually bounded on a page image; "This section
+    defines three variants" has usually taken "section" from something named
+    in text, which is the predecessor, so those two are the members of the
+    list where the deictic reading is least certain and most likely wrong.
+
+    This is a heuristic, not a parser, and it is honest about what it misses,
+    in both directions. Bare quantifier openers ("Both are scored", "Each of
+    them") are not flagged, on purpose rather than by oversight: the shape
+    splits. "Both are scored on three metrics" dangles because "both" has no
+    noun of its own and resolves against the previous sentence, but "Both
+    variants are scored" does not dangle at all, because "variants" supplies
+    its own referent. A flat word list cannot tell those two apart, so
+    quantifiers are left out rather than flagged wrong half the time.
+    Correlatives ("The former", "The latter", "Doing so") are missed for the
+    same reason: catching them needs more than a word list. `there` is
+    deliberately EXCLUDED, not missed: it is an expletive subject, not a
+    referring pronoun, so "There are three variants" is fully self-contained
+    and flagging it would be a pure false positive.
+
+    Two known FALSE POSITIVES, kept rather than chased. `that` is distal and
+    points backward by default, unlike proximal `this`, so "That figure
+    appears in Table 2" is more likely anaphoric than "This figure appears in
+    Table 2" and the identical exemption given to `that` is the least
+    defensible part of the lookahead. Sentence-initial `that` as a
+    complementiser or free-relative head is also wrongly flagged: "That the
+    ablation improves recall is clear." and "That which is verified is shown."
+    are both self-contained and both return True. No cheap regex distinguishes
+    a complementiser from a demonstrative pronoun, and the drafting prompt
+    makes either shape unlikely from a VLM, so this is recorded rather than
+    fixed.
+
+    As with `is_compound`, do not read "not flagged" as "self-contained," and
+    do not read "flagged" as "confirmed dangling."
     """
     return bool(_ANAPHORA.match(claim))
 

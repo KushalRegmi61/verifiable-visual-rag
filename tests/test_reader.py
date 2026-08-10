@@ -122,6 +122,16 @@ def test_a_page_deictic_demonstrative_is_not_flagged():
     assert opens_with_anaphora("This approach avoids annotation.") is True
 
 
+def test_the_lookahead_is_a_word_not_a_prefix():
+    """_PAGE_DEICTIC is a bare alternation, so the lookahead needs its own
+    trailing \\b or it matches a prefix: 'chart' inside 'charter', 'document'
+    inside 'documentation', 'section' inside 'sectional'. All three genuinely
+    dangle and must still be flagged."""
+    assert opens_with_anaphora("This charter defines the scope.") is True
+    assert opens_with_anaphora("This documentation covers the ablation.") is True
+    assert opens_with_anaphora("This sectional view is shown.") is True
+
+
 def test_that_is_covered_like_the_rest_of_the_demonstrative_paradigm():
     """'That' is the fourth member of this/these/those and follows the same
     deictic exemption; there was no principled reason it was left out."""

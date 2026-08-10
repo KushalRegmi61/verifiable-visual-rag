@@ -184,22 +184,33 @@ _ANAPHORA = re.compile(
     r"^\s*(?:it|its|they|them|their|such|"
     r"additionally|also|furthermore|moreover|however|"
     r"therefore|hence|consequently|instead|"
-    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC}))"
+    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC})\b)"
     r")\b",
     re.IGNORECASE,
 )
 ```
 
 The demonstrative group carries a negative lookahead that exempts it before a
-page-deictic noun. "This page", "this table", "this figure" point at the
-image the reader is looking at, not at the previous sentence, and survive
-their predecessor being withheld completely intact; only a demonstrative that
-is not pointing at the page dangles. `there` is deliberately excluded as an
-expletive subject, not a referring pronoun, so "There are three variants" is
-self-contained. Bare quantifier openers ("Both are scored", "Each of them")
-are a known miss, not caught: the shape splits between "Both are scored on
-three metrics" (dangles) and "Both variants are scored" (does not), and a
-flat word list cannot tell those apart.
+page-deictic noun, with its own trailing `\b` so the exemption matches a
+whole word and not a prefix ("chart" cannot exempt "charter"). "This page",
+"this table", "this figure" point at the image the reader is looking at, not
+at the previous sentence, and survive their predecessor being withheld
+completely intact; only a demonstrative that is not pointing at the page
+dangles. Of the eight exempted nouns, `page`/`document`/`slide` name the one
+artifact in view (certain), `figure`/`table`/`chart` name visually bounded
+objects a reader can point at (deixis still dominates), and `section`/
+`paragraph` are not visually bounded on a page image, so those two are the
+members where the deictic reading is least certain. `there` is deliberately
+excluded as an expletive subject, not a referring pronoun, so "There are
+three variants" is self-contained. Bare quantifier openers ("Both are
+scored", "Each of them") are a known miss, not caught: the shape splits
+between "Both are scored on three metrics" (dangles) and "Both variants are
+scored" (does not), and a flat word list cannot tell those apart. Two known
+false positives are kept rather than chased: `that` is distal and points
+backward by default, so the deictic exemption is least defensible for it, and
+sentence-initial `that` as a complementiser or free-relative head ("That the
+ablation improves recall is clear.") is indistinguishable from the
+demonstrative pronoun by a cheap regex.
 
 **`shares_content_word(previous, claim)`** is the chaining proxy. Lowercase,
 strip punctuation, drop a closed stopword list, strip a trailing "s", and test
