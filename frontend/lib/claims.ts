@@ -1,4 +1,4 @@
-import type { ClaimLabel } from "./api";
+import type { ClaimEvent, ClaimLabel } from "./api";
 
 /**
  * Explicit hex rather than Tailwind classes. The colour is chosen at runtime
@@ -53,4 +53,22 @@ export function toneFor(label: ClaimLabel | null): Tone {
   if (label === "unsupported") return "danger";
   if (label === null) return "neutral";
   return "warn";
+}
+
+/**
+ * Split the shown claims into paragraphs at the breaks the reader marked.
+ *
+ * The break lives on the claim rather than being inferred from the text,
+ * because only the reader knows where the topic turns. Verification removes
+ * claims after drafting, so the claim carrying a break is frequently the one
+ * withheld; the first survivor always opens a paragraph regardless of its own
+ * flag, which is what stops the answer from opening with an empty block.
+ */
+export function groupIntoParagraphs(claims: ClaimEvent[]): ClaimEvent[][] {
+  const groups: ClaimEvent[][] = [];
+  for (const claim of claims) {
+    if (groups.length === 0 || claim.starts_paragraph) groups.push([claim]);
+    else groups[groups.length - 1].push(claim);
+  }
+  return groups;
 }
