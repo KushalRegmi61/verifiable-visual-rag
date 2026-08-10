@@ -124,8 +124,17 @@ class Answer(BaseModel):
         Computed rather than validated on input so that no caller can record an
         abstention the claims contradict. It stays in model_dump() output, so
         the wire format is unchanged.
+
+        Two conditions, not one. Nothing survived, OR the LEAD claim did not.
+        The lead is `claims[0]`, the sentence the reader drafted to answer the
+        question directly; everything after it is supporting detail. Showing
+        surviving detail after the answer itself was withheld would present a
+        page of context as though it answered a question it never touched.
+
+        `claims` holds every claim in drafted order including withheld ones, so
+        the lead is still identifiable after the gate has removed it.
         """
-        return not self.shown
+        return not self.shown or self.claims[0].withheld
 
     @property
     def shown(self) -> list["Claim"]:

@@ -192,3 +192,29 @@ def test_the_abstention_flag_cannot_be_set_against_the_claims():
 def test_claim_defaults_to_not_starting_a_paragraph():
     """Additive optional field: every existing construction site still works."""
     assert Claim(text="x", confidence=0.5).starts_paragraph is False
+
+
+def test_a_withheld_lead_abstains_even_when_detail_survived():
+    """THE lead rule.
+
+    The first claim is the one that answers the question; the rest support it.
+    Showing surviving detail after the answer itself was withheld presents a
+    page of context as though it answered a question it never touched, which is
+    the fact dump this design exists to remove. A reviewer is likely to read
+    this as a bug, which is why it is stated as a test.
+    """
+    lead = Claim(text="The evaluation runs on SlideVQA.", confidence=0.4, label="unsupported", abstained=True)
+    detail = Claim(text="Ground truth is derived automatically.", confidence=0.9, label="supported")
+    answer = Answer(question="q", claims=[lead, detail])
+
+    assert answer.shown == [detail]
+    assert answer.abstained_overall is True
+
+
+def test_a_surviving_lead_does_not_abstain():
+    lead = Claim(text="The evaluation runs on SlideVQA.", confidence=0.9, label="supported")
+    detail = Claim(text="Ground truth is derived automatically.", confidence=0.4, label="unsupported", abstained=True)
+    answer = Answer(question="q", claims=[lead, detail])
+
+    assert [c.text for c in answer.shown] == ["The evaluation runs on SlideVQA."]
+    assert answer.abstained_overall is False

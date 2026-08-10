@@ -245,8 +245,8 @@ def test_ask_result_shows_withheld_section_and_abstention_line_when_all_withheld
 
     assert "Answer (0 claim(s) shown):" in out
     assert "Withheld (1 claim(s), not part of the answer):" in out
-    assert "abstained: no claim on this page met the support threshold" in out
-    assert out.index("Withheld") < out.index("abstained: no claim")
+    assert "abstained: the claim answering the question was not verified" in out
+    assert out.index("Withheld") < out.index("abstained: the claim")
 
 
 def test_ask_result_prints_the_threshold_before_the_answer_heading(capsys):
