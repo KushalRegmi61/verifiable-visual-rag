@@ -102,7 +102,8 @@ def prepare_page(
     Vectors are fetched unconditionally. The caller cannot know whether the
     text path will suffice, because the claims come from a reader that has not
     run yet, so a page that grounds entirely through the text layer simply
-    never uses them. One Qdrant round trip against two model calls per claim.
+    never uses them. Two Qdrant calls, get_payload_or_none then get_vectors,
+    against two model calls per claim.
     """
     document = resolve_document(session, doc)
     page = session.scalar(

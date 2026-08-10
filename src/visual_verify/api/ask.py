@@ -15,9 +15,15 @@ written a status line:
 
 - `NoPagesIndexed`  - empty corpus, or retrieval returned nothing.
 - `PageNotFound`    - `doc` matched no document, or matched several, or the
-                      page number does not exist. Only when the caller pinned a
-                      page; the retrieval branch prepares a page the index just
-                      returned.
+                      page number does not exist. Usually a pinned request, but
+                      the retrieval branch raises it too when Qdrant and SQLite
+                      disagree: they are separate stores, so a point in the
+                      index with no row behind it, left by a partially rolled
+                      back ingest or a document deleted from the DB, is found by
+                      prepare_page. The retrieval branch now prepares up to
+                      DEFAULT_PAGES pages rather than one, so there is more of
+                      that surface than there was. Either way it surfaces here,
+                      eagerly, before a status line is written.
 - `AgentError`      - reader and verifier are the same model. `answer_stream`
                       is likewise an eager wrapper around its own generator, so
                       this surfaces here rather than mid-answer.
@@ -53,9 +59,10 @@ from visual_verify.store.models import Document
 
 DEFAULT_K = 5
 # How many pages of the top hit's document are prepared and read. Smaller than
-# DEFAULT_K on purpose: retrieval ranks k pages so the reader has something to
-# choose between, but every prepared page costs a Qdrant round trip and an image
-# in the reader's prompt, and the pages past the third rarely support a claim.
+# DEFAULT_K on purpose: retrieval ranks k pages so there is something to choose
+# between, but each prepared page costs four queries (a Page select, a Box
+# select, then get_payload_or_none and get_vectors against Qdrant), and the
+# pages past the third rarely support a claim.
 DEFAULT_PAGES = 3
 
 
@@ -169,8 +176,16 @@ class Retrieved:
         # only cares about the top page: an empty list would otherwise read to
         # anything iterating `pages` as "nothing was prepared", and grounding
         # would find no evidence on a page that is sitting right there.
+        #
+        # A supplied list is CHECKED, not trusted. Filling in only the empty
+        # case would leave the invariant resting on both construction sites
+        # happening to satisfy it, which is the convention this replaced:
+        # Retrieved(page=a, pages=[b, a]) would construct happily, and the UI
+        # would open on `a` while the answer's leading citation pointed at `b`.
         if not self.pages:
             object.__setattr__(self, "pages", [self.page])
+        elif self.pages[0] is not self.page:
+            raise ValueError("pages[0] must be the page this Retrieved names")
 
 
 AskEvent = Retrieved | AnswerEvent
@@ -273,19 +288,22 @@ def ask_events(
     threshold = request.threshold if request.threshold is not None else settings.abstain_threshold
     stream = answer_stream(
         request.question,
-        prepared.image_path,
-        prepared.boxes,
-        page=prepared.page_no,
+        # Every prepared page, in retrieval order. The reader sees all of them
+        # and grounding searches all of them, so a claim is cited to whichever
+        # page actually supports it rather than to whichever page ranked first.
+        retrieved.pages,
         reader_chat=reader_chat,
         verifier_chat=verifier_chat,
         threshold=threshold,
-        page_vectors=prepared.page_vectors,
         # None in that branch, not embedder.embed_query. answer_stream calls it
         # once per claim to build query vectors that ground() is structurally
-        # guaranteed to discard when page_vectors is None, so passing it spends
+        # guaranteed to discard when no page has vectors, so passing it spends
         # a multi-second GPU call per claim to compute nothing.
-        embed_query=embedder.embed_query if prepared.page_vectors is not None else None,
-        grid=prepared.grid,
+        embed_query=(
+            embedder.embed_query
+            if any(p.page_vectors is not None for p in retrieved.pages)
+            else None
+        ),
     )
     return _emit(retrieved, stream)
 

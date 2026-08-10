@@ -296,11 +296,20 @@ def test_candidates_from_another_document_carry_its_name(indexed):
 
 @pytest.fixture
 def two_indexed(tmp_path, monkeypatch, multipage_pdf):
-    """A three-page document and a one-page document from somewhere else.
+    """Two three-page documents, so the raw top k can straddle them.
 
     Retrieval is corpus-wide and takes no document filter, so with both indexed
-    the raw top k really can straddle them, which is the case prepare_pages
-    exists to refuse.
+    a hit list really can span the two, which is the case prepare_pages exists
+    to refuse.
+
+    WHICH DOCUMENT RANKS FIRST IS ARBITRARY BY CONSTRUCTION, AND NO TEST HERE
+    MAY DEPEND ON IT. FakeEmbedder.embed_page seeds from the ABSOLUTE image
+    path, which contains the per-run tmp_path, while embed_query seeds from the
+    question text. Nothing correlates the two, so the winner re-rolls whenever
+    pytest rotates its numbered basetemp. `other.pdf` gets three pages for the
+    same reason multipage_pdf has three: when it was one page, a run where it
+    won left `pages` with a single entry and no page 1 to pin, and the file
+    failed roughly half the time while prepare_pages was entirely correct.
     """
     import fitz
 
@@ -312,7 +321,9 @@ def two_indexed(tmp_path, monkeypatch, multipage_pdf):
 
     other = tmp_path / "other.pdf"
     doc = fitz.open()
-    doc.new_page(width=612.0, height=792.0).insert_text((72.0, 100.0), "Other doc", fontsize=12)
+    for i in range(3):
+        page = doc.new_page(width=612.0, height=792.0)
+        page.insert_text((72.0, 100.0), f"Other doc page {i}", fontsize=12)
     doc.save(other)
     doc.close()
 
@@ -345,8 +356,8 @@ def test_the_top_page_is_still_the_first_prepared_page(two_indexed):
 
 
 def test_no_more_than_the_page_limit_is_prepared(two_indexed):
-    """k is 5 and DEFAULT_PAGES is 3. Every prepared page is a Qdrant round trip
-    and, later, an image in the reader's prompt."""
+    """k is 5 and DEFAULT_PAGES is 3. Every prepared page is four queries: a
+    Page select, a Box select, then get_payload_or_none and get_vectors."""
     from visual_verify.api.ask import DEFAULT_PAGES
 
     retrieved = run(two_indexed, AskRequest(question="What happened?", k=5))[0]
@@ -363,6 +374,28 @@ def test_a_pinned_request_prepares_only_the_page_it_pinned(two_indexed):
     events = run(two_indexed, AskRequest(question="q", doc=doc, page=1), wrap=NoSearchIndex)
 
     assert [p.page_no for p in events[0].pages] == [1]
+
+
+def test_a_pages_list_that_does_not_start_with_the_page_is_refused(two_indexed):
+    """The default fills `pages` only when it is empty, so a supplied list has
+    to be checked rather than trusted. Otherwise the invariant would rest on
+    both construction sites happening to satisfy it, and a Retrieved whose UI
+    opens on one page while the answer's leading citation points at another
+    would construct without complaint."""
+    pages = run(two_indexed, AskRequest(question="q"))[0].pages
+    assert len(pages) > 1
+
+    with pytest.raises(ValueError, match="pages\\[0\\]"):
+        Retrieved(page=pages[0], score=None, pages=[pages[1], pages[0]])
+
+
+def test_omitting_pages_still_defaults_to_the_named_page(two_indexed):
+    """The check must not cost the default. api/wire.py's tests build a
+    Retrieved with a page and nothing else, and an empty `pages` would read to
+    anything iterating it as "nothing was prepared"."""
+    page = run(two_indexed, AskRequest(question="q"))[0].page
+
+    assert Retrieved(page=page, score=None).pages == [page]
 
 
 class UnembeddedExcept:
