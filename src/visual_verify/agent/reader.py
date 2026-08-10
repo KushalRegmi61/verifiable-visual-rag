@@ -159,16 +159,35 @@ def opens_with_anaphora(claim: str) -> bool:
 # Closed class only. A long stopword list would start removing the words that
 # actually carry the chain; these are the ones that appear in essentially every
 # sentence and therefore signal nothing about whether two claims are connected.
+# Kept consistent with `_ANAPHORA`: a word that function already treats as a
+# contentless referring word (it, its, they, them, their, such) belongs here
+# too, since otherwise the same file would call it contentless in one place
+# and treat it as chaining evidence in the next.
 _STOPWORDS = frozenset(
-    """a an and are as at be been by for from has have in is it its of on or
-    that the their there these this those to was were which with""".split()
+    """a an and are as at be been but by can could did do does for from
+    has have he him his however if in is it its not of on one only or other
+    she such than that the their them then there these they this those to
+    was we were which while who whom will with would you your
+    all any both each""".split()
 )
 
-_WORD = re.compile(r"[a-z0-9]+")
+# A leading letter, then at least one more letter or digit: excludes bare
+# numbers ("3", "5.1" tokenises to "5" and "1") and the lone "s" a possessive
+# leaves behind ("document's" -> "document", "s"), none of which name
+# anything shared between two claims. Acronyms and mixed tokens survive
+# ("em", "f1", "iou", "slidevqa").
+_WORD = re.compile(r"[a-z][a-z0-9]+")
 
 
 def _content_words(text: str) -> set[str]:
     """Lowercased words with stopwords dropped and a trailing s stripped.
+
+    The stopword filter runs BEFORE the trailing s is stripped, on purpose.
+    "does" is not itself in `_STOPWORDS`, only "do"; if stripping ran first
+    "does" would already be "doe" by the time the filter saw it, and "doe" is
+    not a word the filter will ever recognize. Filtering the raw token first
+    means the list only has to name the word people actually type, not every
+    stem an inflection could turn it into.
 
     Strips at most ONE trailing s, not `str.rstrip("s")`'s "all of them":
     rstrip removes the whole trailing run, so a word ending in a doubled s
@@ -182,8 +201,8 @@ def _content_words(text: str) -> set[str]:
     exists to catch (a bare final s marking a plural), and honest that it is
     not morphology.
     """
-    words = _WORD.findall(text.lower())
-    return {(w[:-1] if w.endswith("s") and len(w) > 1 else w) for w in words if w not in _STOPWORDS}
+    words = [w for w in _WORD.findall(text.lower()) if w not in _STOPWORDS]
+    return {(w[:-1] if w.endswith("s") and len(w) > 1 else w) for w in words}
 
 
 def shares_content_word(previous: str, claim: str) -> bool:
@@ -202,6 +221,17 @@ def shares_content_word(previous: str, claim: str) -> bool:
 
     The stopword list is what makes it mean anything. Every pair of English
     sentences shares "the" or "is", so without it the answer is always True.
+
+    Known false-chain sources, in the direction that actually costs
+    something: two claims can share a content word by pure accident of
+    English function-word usage and get counted as chained when they are not.
+    `_STOPWORDS` is a closed, hand-maintained list, not a linguistic
+    resource, so any function word outside it (a preposition, a modal, a
+    determiner nobody added yet) still counts as content and can produce a
+    match neither claim intended. A measured chained-pair rate from this
+    function is therefore an upper bound on real chaining, not a
+    measurement of it: it can overstate how connected an answer is, never
+    understate it.
     """
     return bool(_content_words(previous) & _content_words(claim))
 

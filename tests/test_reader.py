@@ -217,3 +217,33 @@ def test_a_doubled_trailing_s_is_not_over_stripped():
         "She cares about the outcome.",
         "He gave a gentle caress.",
     ) is False
+
+
+def test_bare_numbers_and_possessive_s_do_not_count_as_chaining():
+    """A page number, figure number, section number, or possessive is
+    ordinary in an answer about a document page. `_WORD` requires a leading
+    letter so a bare number token ("3", or "1" from "5.1") is never a content
+    word, and a possessive's stray "s" ("document's" -> "document", "s")
+    never becomes one either."""
+    assert shares_content_word(
+        "Page 3 lists the evaluation metrics.",
+        "Figure 3 plots the ablation.",
+    ) is False
+    assert shares_content_word(
+        "The rubric defines section 5.1.",
+        "Recall improves by 1 point.",
+    ) is False
+    assert shares_content_word(
+        "The document's title is bold.",
+        "The reader's output is prose.",
+    ) is False
+
+
+def test_each_does_not_count_as_chaining():
+    """"each" appears in essentially every sentence about a set of things and
+    carries no topic of its own; two claims about unrelated sets should not
+    chain just because both use it."""
+    assert shares_content_word(
+        "Each variant is evaluated separately.",
+        "Each metric is reported once.",
+    ) is False
