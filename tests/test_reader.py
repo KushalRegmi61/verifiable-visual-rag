@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from visual_verify.agent.reader import is_compound, read
+from visual_verify.agent.reader import is_compound, opens_with_anaphora, read
 from visual_verify.agent.schemas import ClaimList
 from visual_verify.agent.types import FakeChat
 
@@ -73,8 +73,6 @@ def test_the_widened_verb_vocabulary_catches_report_register():
 
 
 def test_a_sentence_opening_with_a_pronoun_is_flagged():
-    from visual_verify.agent.reader import opens_with_anaphora
-
     assert opens_with_anaphora("It also isolates the added layer.") is True
     assert opens_with_anaphora("They are scored on three metrics.") is True
     assert opens_with_anaphora("This approach avoids annotation.") is True
@@ -87,15 +85,11 @@ def test_a_sentence_merely_containing_a_pronoun_is_not_flagged():
     while looking like it works. Only the OPENING can dangle, because only the
     opening is what a reader resolves against the previous sentence.
     """
-    from visual_verify.agent.reader import opens_with_anaphora
-
     assert opens_with_anaphora("The variant that supports it is Grounded RAG.") is False
     assert opens_with_anaphora("The metrics and their definitions appear below.") is False
 
 
 def test_a_self_contained_sentence_is_not_flagged():
-    from visual_verify.agent.reader import opens_with_anaphora
-
     assert opens_with_anaphora("The evaluation compares three system variants.") is False
     assert opens_with_anaphora("Each of the three variants is scored separately.") is False
 
@@ -103,7 +97,59 @@ def test_a_self_contained_sentence_is_not_flagged():
 def test_a_word_starting_with_a_pronoun_is_not_flagged():
     """Word boundary, not prefix. "Itemised" and "Thistle" both begin with a
     pronoun's letters and neither is anaphora."""
-    from visual_verify.agent.reader import opens_with_anaphora
-
     assert opens_with_anaphora("Itemised costs appear in Table 2.") is False
+    assert opens_with_anaphora("Thistle grows wild here.") is False
     assert opens_with_anaphora("Those results are listed in Table 2.") is True
+
+
+def test_leading_whitespace_does_not_defeat_the_anchor():
+    """The anchor is `^\\s*`, not `^`; a claim with incidental leading
+    whitespace must still be checked from its first real word."""
+    assert opens_with_anaphora("  This approach avoids annotation.") is True
+
+
+def test_a_page_deictic_demonstrative_is_not_flagged():
+    """'This page', 'this table', 'this figure' point at the image the reader
+    is looking at, not at the sentence before. They are deictic, not
+    anaphoric, and survive their predecessor being withheld intact. A live
+    test in test_answer.py asks "What is this page about?" and expects a
+    correct "This page ..." answer to pass with zero tolerance, so a false
+    positive here is not academic."""
+    assert opens_with_anaphora("This page defines three variants.") is False
+    assert opens_with_anaphora("This table lists the results.") is False
+    assert opens_with_anaphora("This figure compares two baselines.") is False
+    assert opens_with_anaphora("This document specifies the ablation design.") is False
+    assert opens_with_anaphora("This approach avoids annotation.") is True
+
+
+def test_that_is_covered_like_the_rest_of_the_demonstrative_paradigm():
+    """'That' is the fourth member of this/these/those and follows the same
+    deictic exemption; there was no principled reason it was left out."""
+    assert opens_with_anaphora("That approach avoids annotation.") is True
+    assert opens_with_anaphora("That figure appears in Table 2.") is False
+
+
+def test_resultative_connectives_are_flagged_like_however():
+    """however/moreover/furthermore already dangle; therefore/hence/
+    consequently/instead resolve against the previous sentence the same way
+    and were missing for no principled reason."""
+    assert opens_with_anaphora("Therefore, the claim is withheld.") is True
+    assert opens_with_anaphora("Hence the ablation removes the layer.") is True
+    assert opens_with_anaphora("Consequently the score drops.") is True
+    assert opens_with_anaphora("Instead, the reader abstains.") is True
+
+
+def test_expletive_there_is_not_flagged():
+    """'There' is an expletive subject, not a referring pronoun. "There are
+    three variants" is fully self-contained; flagging it would be a pure
+    false positive, so it is excluded by design."""
+    assert opens_with_anaphora("There are three variants.") is False
+
+
+def test_bare_quantifier_openers_are_a_known_miss():
+    """Documented, not silently wrong: 'Both'/'Each of them' dangle without a
+    noun of their own, but a flat word list cannot tell that shape apart from
+    'Both variants are scored', which is self-contained. Left unflagged by
+    design; see the docstring."""
+    assert opens_with_anaphora("Both are scored on three metrics.") is False
+    assert opens_with_anaphora("Each of them is scored.") is False

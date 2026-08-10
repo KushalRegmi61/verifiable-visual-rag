@@ -175,15 +175,31 @@ response is to surface the rate in the S7 eval and tune the prompt until it is
 near zero.
 
 **`opens_with_anaphora(claim)`** matches a sentence-initial pronoun,
-demonstrative or bare additive connective:
+demonstrative or bare additive/resultative connective:
 
 ```python
+_PAGE_DEICTIC = r"page|document|slide|figure|table|chart|section|paragraph"
+
 _ANAPHORA = re.compile(
-    r"^\s*(?:it|its|they|them|their|this|these|those|such|"
-    r"additionally|also|furthermore|moreover|however)\b",
+    r"^\s*(?:it|its|they|them|their|such|"
+    r"additionally|also|furthermore|moreover|however|"
+    r"therefore|hence|consequently|instead|"
+    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC}))"
+    r")\b",
     re.IGNORECASE,
 )
 ```
+
+The demonstrative group carries a negative lookahead that exempts it before a
+page-deictic noun. "This page", "this table", "this figure" point at the
+image the reader is looking at, not at the previous sentence, and survive
+their predecessor being withheld completely intact; only a demonstrative that
+is not pointing at the page dangles. `there` is deliberately excluded as an
+expletive subject, not a referring pronoun, so "There are three variants" is
+self-contained. Bare quantifier openers ("Both are scored", "Each of them")
+are a known miss, not caught: the shape splits between "Both are scored on
+three metrics" (dangles) and "Both variants are scored" (does not), and a
+flat word list cannot tell those apart.
 
 **`shares_content_word(previous, claim)`** is the chaining proxy. Lowercase,
 strip punctuation, drop a closed stopword list, strip a trailing "s", and test

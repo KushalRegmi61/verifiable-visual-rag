@@ -78,9 +78,20 @@ def is_compound(claim: str) -> bool:
 # Sentence-initial only. A pronoun in the MIDDLE of a sentence resolves within
 # that sentence and is fine; it is the opening that a reader resolves against
 # whatever came before, and whatever came before may have been withheld.
+#
+# The demonstrative group (this/these/those/that) carries a negative lookahead
+# that exempts it before a page-deictic noun. "This page", "this table", "this
+# figure" point at the image the reader is looking at, not at the previous
+# sentence, and they survive their predecessor being withheld completely
+# intact. Only a demonstrative that is NOT pointing at the page dangles.
+_PAGE_DEICTIC = r"page|document|slide|figure|table|chart|section|paragraph"
+
 _ANAPHORA = re.compile(
-    r"^\s*(?:it|its|they|them|their|this|these|those|such|"
-    r"additionally|also|furthermore|moreover|however)\b",
+    r"^\s*(?:it|its|they|them|their|such|"
+    r"additionally|also|furthermore|moreover|however|"
+    r"therefore|hence|consequently|instead|"
+    rf"(?:this|these|those|that)(?!\s+(?:{_PAGE_DEICTIC}))"
+    r")\b",
     re.IGNORECASE,
 )
 
@@ -89,7 +100,7 @@ def opens_with_anaphora(claim: str) -> bool:
     """Whether this claim depends on the sentence before it to make sense.
 
     Verification runs after drafting, so any claim may be removed before the
-    answer is shown. A claim opening with "It" or "Each of them" is meaningless
+    answer is shown. A claim opening with "It" or "However" is meaningless
     once its predecessor is withheld, and it does not announce that it is
     broken: it stays grammatical and quietly says something other than what was
     verified.
@@ -100,6 +111,21 @@ def opens_with_anaphora(claim: str) -> bool:
 
     `\\b` matters. A prefix match would flag "Itemised costs appear in Table 2",
     where "It" is the first two letters of a word and nothing is dangling.
+
+    This is a heuristic, not a parser, and it is honest about what it misses.
+    Bare quantifier openers ("Both are scored", "Each of them") are not
+    flagged, on purpose rather than by oversight: the shape splits. "Both are
+    scored on three metrics" dangles because "both" has no noun of its own and
+    resolves against the previous sentence, but "Both variants are scored"
+    does not dangle at all, because "variants" supplies its own referent. A
+    flat word list cannot tell those two apart, so quantifiers are left out
+    rather than flagged wrong half the time. Correlatives ("The former", "The
+    latter", "Doing so") are missed for the same reason: catching them needs
+    more than a word list. `there` is deliberately EXCLUDED, not missed: it is
+    an expletive subject, not a referring pronoun, so "There are three
+    variants" is fully self-contained and flagging it would be a pure false
+    positive. As with `is_compound`, do not read "not flagged" as
+    "self-contained."
     """
     return bool(_ANAPHORA.match(claim))
 
