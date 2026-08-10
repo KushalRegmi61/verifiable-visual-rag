@@ -22,7 +22,14 @@ function ToneIcon({ tone, className }: { tone: Tone; className?: string }) {
 type Props = {
   shown: ClaimEvent[];
   withheld: ClaimEvent[];
-  imageUrl: string | null;
+  /**
+   * The page image for a given claim, resolved per claim rather than once.
+   * A claim is grounded against every page the reader saw, so its evidence is
+   * not always on the page retrieval ranked first, and a single URL here
+   * cropped the WRONG page at the right coordinates: real ink, wrong page,
+   * looking entirely correct. That is a fabricated citation in miniature.
+   */
+  imageUrlFor: (claim: ClaimEvent) => string | null;
   expanded: number | null;
   hovered: number | null;
   onToggle: (index: number) => void;
@@ -50,7 +57,7 @@ const THUMB_ASPECT = 5 / 2;
 export function EvidenceVault({
   shown,
   withheld,
-  imageUrl,
+  imageUrlFor,
   expanded,
   hovered,
   onToggle,
@@ -144,7 +151,7 @@ export function EvidenceVault({
                   id={`claim-body-${c.index}`}
                   className="border-t border-border bg-sunken/60 px-3 py-3"
                 >
-                  {imageUrl && c.regions.length > 0 && (
+                  {imageUrlFor(c) && c.regions.length > 0 && (
                     <div className="grid gap-2 sm:grid-cols-2">
                       {c.regions.map((r, i) => (
                         <button
@@ -155,7 +162,7 @@ export function EvidenceVault({
                           className="group relative block cursor-pointer overflow-hidden rounded-md text-left"
                         >
                           <RegionCrop
-                            imageUrl={imageUrl}
+                            imageUrl={imageUrlFor(c)!}
                             bbox={r.bbox}
                             colour={colour}
                             containerAspect={THUMB_ASPECT}

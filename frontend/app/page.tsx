@@ -190,13 +190,22 @@ export default function Home() {
   // `shown` by construction, so the flag that says the answer is abstaining
   // only exists on the unfiltered list.
   const abstained = isAbstaining(claims, done);
-  const imageUrl = retrieved
-    ? `${API}/documents/${retrieved.doc_sha}/pages/${retrieved.page}/image`
-    : null;
   // Every page the reader saw, and the one currently in the viewer. `viewing`
   // is set from the same frame as `retrieved`, so falling back to the top page
   // here covers the render between the two rather than a missing value.
   const pages = retrieved?.pages ?? [];
+  // Resolved per claim, not once. The vault crops a thumbnail per region, and a
+  // claim grounded on another of the pages the reader saw needs THAT page's
+  // image; handing every crop the retrieved page's image showed real ink from
+  // the wrong page at the right coordinates, which looks correct and is not.
+  //
+  // pageAspect below is still measured from the viewer's image only. Every page
+  // here belongs to one document, and a document's pages are the same size in
+  // every corpus this has run on, so the aspect is shared in practice. If
+  // cross-document reading ever lands, the crop for a page of a different shape
+  // would be distorted and the aspect has to become per page too.
+  const imageUrlFor = (c: ClaimEvent) =>
+    retrieved ? imageFor(pageForClaim(c, pages, topPageOf(retrieved))) : null;
   const viewingRef = viewing ?? (retrieved ? topPageOf(retrieved) : null);
   const viewerUrl = viewingRef ? imageFor(viewingRef) : null;
   // True only while the viewer is on the page retrieval actually ranked. The
@@ -439,7 +448,7 @@ export default function Home() {
               <EvidenceVault
                 shown={shown}
                 withheld={withheld}
-                imageUrl={imageUrl}
+                imageUrlFor={imageUrlFor}
                 expanded={expanded}
                 hovered={hovered}
                 onToggle={revealClaim}
