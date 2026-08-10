@@ -25,7 +25,7 @@ from visual_verify.agent.events import (
     ClaimVerified,
     ReadingStarted,
 )
-from visual_verify.agent.reader import is_compound, read
+from visual_verify.agent.reader import is_compound, read, shares_a_term
 from visual_verify.agent.rubric import SUPPORTED_FLOOR, abstention_score
 from visual_verify.agent.types import StructuredChat
 from visual_verify.agent.verifier import verify
@@ -144,6 +144,32 @@ def _answer_events(
             # in the text layer matches), the visible result is an answer
             # where every claim is insufficiently evidenced, not a crash.
             regions = []
+
+        # Drop a region whose text names nothing the claim names. This is
+        # applied HERE and not inside ground() on purpose: ground()'s contract
+        # says an empty list means no evidence exists on the page and never
+        # that the evidence looked weak, and a filter in there would also stop
+        # S7's ablation separating the grounder's contribution from the
+        # verifier's. This is the point where the pipeline decides what to
+        # CITE, so it is the right place to refuse to cite a non-sequitur.
+        #
+        # Measured, and the reason this exists: the visual path returned the
+        # page number, an 11 by 22 px box, as the evidence for three different
+        # claims across two unrelated questions on proposal.pdf page 14, and
+        # the verifier scored two of them supported at 0.90 and 0.95. It judges
+        # whether the CLAIM is true, and the claims were true, so a fabricated
+        # citation passes the abstention gate untouched. Nothing else in the
+        # pipeline looks at whether the region is about the claim at all.
+        #
+        # Dropping rather than flagging, unlike is_compound and the other
+        # advisory checks. Those keep a claim whose EVIDENCE is real and whose
+        # phrasing is imperfect. Here the evidence itself is the thing that is
+        # wrong, and a citation nobody should trust is worse than no citation:
+        # with regions empty the verifier returns insufficient_evidence and the
+        # gate withholds the claim, which is the honest outcome.
+        cited = [r for r in regions if shares_a_term(text, r.text)]
+        regions = cited
+
         verdict = verify(verifier_chat, image_path, text, regions)
         score = abstention_score(verdict.label, verdict.confidence)
         claim = Claim(
@@ -152,7 +178,21 @@ def _answer_events(
             confidence=verdict.confidence,
             label=verdict.label,
             reason=verdict.reason,
-            abstained=score < threshold,
+            # A claim with no region cannot be shown, whatever the verifier
+            # said. The prompt asks it to answer insufficient_evidence when it
+            # is handed no regions, and it complies INCONSISTENTLY: measured on
+            # proposal.pdf page 14, one region-less claim came back
+            # insufficient_evidence at 1.00 and another came back supported at
+            # 0.90 in the same answer. An instruction a model follows most of
+            # the time is not a guarantee, and this project's whole claim is
+            # region-level evidence, so a sentence displayed with no region is
+            # an answer with no evidence behind it.
+            #
+            # The verifier's raw verdict is preserved on `label` rather than
+            # overwritten, because S7 computes confident-wrong against coverage
+            # and needs what the judge actually said. Only the display gate
+            # moves.
+            abstained=score < threshold or not regions,
             compound=is_compound(text),
             starts_paragraph=draft.starts_paragraph,
         )

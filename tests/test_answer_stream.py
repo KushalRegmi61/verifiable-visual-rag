@@ -13,6 +13,7 @@ import pytest
 from helpers import claim_list
 from visual_verify.agent import AgentError, answer, answer_stream
 from visual_verify.agent.events import AnswerComplete, ClaimsProduced, ClaimVerified, ReadingStarted
+from visual_verify.agent.reader import shares_a_term
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.agent.types import FakeChat
 from visual_verify.ingest.boxes import BoxRecord
@@ -224,3 +225,187 @@ def test_the_paragraph_break_survives_the_trip_from_reader_to_claim():
 
     assert out.claims[0].starts_paragraph is False
     assert out.claims[1].starts_paragraph is True
+
+
+def test_a_non_sequitur_region_reaches_the_verifier_as_no_evidence():
+    """THE test of the citation filter, and it pins WHERE the filter lives.
+
+    Measured live on 2026-08-10: the visual path returned [0.526 0.940 0.535
+    0.953] on proposal.pdf page 14, an 11 by 22 px box holding the page number,
+    as the cited evidence for three different claims across two unrelated
+    questions. The verifier scored two of them supported at 0.90 and 0.95,
+    because it judges whether the CLAIM is true and the claims were true. A
+    fabricated citation passed the abstention gate untouched.
+
+    Asserted on the verifier's PROMPT rather than on the returned Claim,
+    because that is the thing the filter has to change. A test that only
+    checked `claim.regions` would pass with the filter moved into ground(),
+    where it must not be: ground()'s contract says an empty list means no
+    evidence exists on the page, and S7's ablation needs the grounder measured
+    without it.
+
+    The visual path is forced by scripting a claim that is NOT in the text
+    layer, which is the only way a region can arrive that does not already
+    contain the claim's own words.
+    """
+    import numpy as np
+
+    from visual_verify.agent import answer
+    from visual_verify.agent.verifier import NO_EVIDENCE
+    from visual_verify.ingest.boxes import BoxRecord
+    from visual_verify.retrieval.geometry import PatchGrid
+
+    page_number = [
+        BoxRecord(
+            kind="word",
+            x0=0.526,
+            y0=0.940,
+            x1=0.535,
+            y1=0.953,
+            text="7",
+            block_no=0,
+            line_no=0,
+            word_no=0,
+        )
+    ]
+    grid = PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16)
+    page_vectors = np.ones((16, 8), dtype=np.float32)
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat(
+        "v", [Verdict(label="supported", confidence=0.95, reason="looks fine to me")]
+    )
+
+    out = answer(
+        "q",
+        Path("page.png"),
+        page_number,
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        page_vectors=page_vectors,
+        embed_query=lambda _: np.ones((2, 8), dtype=np.float32),
+        grid=grid,
+    )
+
+    prompt = verifier.calls[0].prompt
+    assert NO_EVIDENCE in prompt, (
+        "the page-number region was cited to the verifier instead of being dropped"
+    )
+    assert "0.526" not in prompt, "the dropped region's geometry still reached the verifier"
+    assert out.claims[0].regions == []
+
+
+def test_a_region_that_names_nothing_in_the_claim_is_not_cited():
+    """The page-number sink, pinned at the layer that decides what to cite.
+
+    A GroundedRegion whose text shares no term with the claim reaches the
+    verifier as no evidence at all, so the rubric returns insufficient_evidence
+    and the gate withholds the claim. Before this, the region was cited, the
+    verifier judged only whether the CLAIM was true, and a true claim with a
+    fabricated citation passed at 0.95.
+
+    Driven through answer() rather than by calling the filter directly, because
+    the filter living in the wrong place is the failure mode: ground() must not
+    do it, and a unit test of the predicate cannot tell where it was applied.
+    """
+    from visual_verify.agent import answer
+
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat(
+        "v", [Verdict(label="supported", confidence=0.95, reason="looks fine to me")]
+    )
+
+    out = answer(
+        "q",
+        Path("page.png"),
+        page_boxes(),
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+    )
+
+    # The text path finds this claim verbatim, so it is cited normally and the
+    # filter is not what produced this. That is the control half.
+    assert out.claims[0].regions, "the verbatim claim should still carry its region"
+    assert all(shares_a_term(out.claims[0].text, r.text) for r in out.claims[0].regions), (
+        "every cited region must name something the claim names"
+    )
+
+
+def test_the_verifier_sees_no_evidence_when_every_region_was_a_non_sequitur():
+    """The half the fixture above cannot reach, because the text path always
+    finds a real line. Asserts the CONTRACT: what the verifier is handed is the
+    filtered list, so a page-number-only grounding arrives as empty rather than
+    as a citation the verifier will rubber-stamp."""
+    from visual_verify.contracts import GroundedRegion
+
+    page_number = GroundedRegion(
+        page=0,
+        bbox=(0.526, 0.940, 0.535, 0.953),
+        score=1.0,
+        modality="visual",
+        text="7",
+        resolution="line",
+    )
+    claim = "The three evaluation metrics are answer accuracy and grounding overlap."
+
+    assert [r for r in [page_number] if shares_a_term(claim, r.text)] == []
+
+
+def test_a_claim_with_no_region_is_withheld_whatever_the_verifier_said():
+    """Structural, because the prompt instruction is not obeyed reliably.
+
+    The verifier prompt asks for insufficient_evidence when no regions are
+    listed. Measured on proposal.pdf page 14, it complied for one region-less
+    claim (insufficient_evidence at 1.00) and not for another in the SAME
+    answer (supported at 0.90). A sentence displayed with no region is an
+    answer with no evidence behind it, which is the one thing this project
+    exists to refuse, so it cannot rest on the model cooperating.
+
+    The raw verdict stays on `label` for the S7 eval; only the display gate
+    moves.
+    """
+    import numpy as np
+
+    from visual_verify.agent import answer
+    from visual_verify.ingest.boxes import BoxRecord
+    from visual_verify.retrieval.geometry import PatchGrid
+
+    page_number = [
+        BoxRecord(
+            kind="word",
+            x0=0.526,
+            y0=0.940,
+            x1=0.535,
+            y1=0.953,
+            text="8",
+            block_no=0,
+            line_no=0,
+            word_no=0,
+        )
+    ]
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat(
+        "v", [Verdict(label="supported", confidence=1.0, reason="I like it anyway")]
+    )
+
+    out = answer(
+        "q",
+        Path("page.png"),
+        page_number,
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        page_vectors=np.ones((16, 8), dtype=np.float32),
+        embed_query=lambda _: np.ones((2, 8), dtype=np.float32),
+        grid=PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16),
+    )
+
+    claim = out.claims[0]
+    assert claim.regions == []
+    assert claim.label == "supported", "the verifier's raw verdict must survive for S7"
+    assert claim.withheld is True, "a claim with no evidence must not be displayable"
+    assert out.shown == []

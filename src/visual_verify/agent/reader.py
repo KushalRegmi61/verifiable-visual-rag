@@ -260,6 +260,53 @@ def _content_words(text: str) -> set[str]:
     return {(w[:-1] if w.endswith("s") and len(w) > 1 else w) for w in words}
 
 
+# Same vocabulary as _WORD above, minus the leading-letter requirement. A bare
+# number cannot chain two sentences together, which is why _WORD excludes it,
+# but a number absolutely can be the thing a claim cites: "42%" is the evidence
+# for "revenue grew 42 percent". Two questions, two patterns, one stopword list.
+_TERM = re.compile(r"[a-z0-9]+")
+
+
+def shares_a_term(claim: str, region_text: str | None) -> bool:
+    """Whether a region's text is plausibly about `claim` at all.
+
+    NOT a relevance score and not a threshold. It answers one categorical
+    question: does the text under this box name anything the claim names? A
+    region that shares nothing is not weak evidence, it is a non-sequitur, and
+    citing it asserts a connection that does not exist.
+
+    Built for a measured failure. On proposal.pdf page 14 the visual path
+    selected [0.526 0.940 0.535 0.953], an 11 by 22 px box holding the page
+    number, as the evidence for three different claims across two unrelated
+    questions. The verifier scored two of them supported at 0.90 and 0.95,
+    because it judges whether the CLAIM is true and the claims were. The claim
+    was true, the citation was fabricated, and the box landed on real ink so
+    nothing looked wrong. That is the failure this project exists to prevent,
+    arriving through the one door the abstention gate does not watch.
+
+    Deliberately NOT `shares_content_word`. That function's pattern requires a
+    leading letter so a bare number cannot chain two sentences, which is right
+    for chaining and wrong here: it would score every purely numeric region as
+    fabricated and drop the citation a numeric claim most needs.
+
+    Returns True when there is no text to judge. A visual region can snap to a
+    box with no text layer, and an unjudgeable citation must not be called
+    fabricated: absence of text is absence of evidence ABOUT the citation, not
+    evidence against it. Those regions keep whatever trust the grounder gave
+    them, which is the honest default and also the one that cannot regress a
+    scanned page into answering nothing.
+
+    The stopword list is what makes it mean anything, exactly as it is for
+    `shares_content_word`. A text-layer line almost always contains "the", so
+    without the filter every region cites every claim.
+    """
+    if region_text is None or not region_text.strip():
+        return True
+    claim_terms = {w for w in _TERM.findall(claim.lower()) if w not in _STOPWORDS}
+    region_terms = {w for w in _TERM.findall(region_text.lower()) if w not in _STOPWORDS}
+    return bool(claim_terms & region_terms)
+
+
 def shares_content_word(previous: str, claim: str) -> bool:
     """Whether `claim` picks up anything from `previous`.
 

@@ -23,6 +23,14 @@ Claim: {claim}
 Evidence regions selected from the page:
 {evidence}
 
+Judge ONLY what is inside the listed evidence regions. The page image is given
+so you can read those regions in their context, NOT as a second source of
+evidence. A claim can be perfectly true of the page and still be unsupported by
+the regions you were handed, and that is the case you exist to catch.
+
+If no regions were listed at all, you cannot verify anything: answer
+insufficient_evidence.
+
 Choose exactly one label:
 - supported: the evidence clearly establishes the claim
 - partially_supported: the evidence establishes part of the claim

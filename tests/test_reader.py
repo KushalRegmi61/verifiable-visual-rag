@@ -315,3 +315,68 @@ def test_read_does_not_warn_on_properly_shaped_output():
         claims = read(chat, Path("page.png"), "What happened?")
 
     assert claims[1].starts_paragraph is True
+
+
+def test_a_region_naming_nothing_in_the_claim_is_not_a_citation():
+    """THE test of this function, and the failure it was built for.
+
+    Measured live on 2026-08-10: the region [0.526 0.940 0.535 0.953] on
+    proposal.pdf page 14 is 11 by 22 px, horizontally centred, six percent from
+    the bottom. Cropped and inspected, it is the page number, a single digit.
+    It came back as the cited evidence for three different claims across two
+    unrelated questions, and the verifier scored two of them supported at 0.90
+    and 0.95. The claim was true, the citation was fabricated, and nothing in
+    the pipeline noticed.
+    """
+    from visual_verify.agent.reader import shares_a_term
+
+    claim = (
+        "The three evaluation metrics are answer accuracy, grounding overlap, "
+        "and abstention quality."
+    )
+    assert shares_a_term(claim, "7") is False
+
+
+def test_a_number_is_a_citable_term_even_though_it_is_not_a_chaining_term():
+    """The reason this is NOT shares_content_word.
+
+    That function's `_WORD` requires a leading letter, deliberately, so a bare
+    number cannot chain two sentences together. Reusing it here would score
+    every purely numeric region as fabricated and drop the exact citation a
+    numeric claim needs. Two questions, two vocabularies, one stopword list.
+    """
+    from visual_verify.agent.reader import shares_a_term, shares_content_word
+
+    assert shares_a_term("Revenue grew 42 percent in Q3.", "42%") is True
+    # The sibling disagrees, correctly, for its own purpose.
+    assert shares_content_word("Revenue grew 42 percent in Q3.", "42%") is False
+
+
+def test_a_shared_stopword_is_not_a_citation():
+    """Without the stopword list every region cites every claim, because a
+    text-layer line almost always contains "the". That would make the check
+    pass on the page number the moment the footer held "the" anything."""
+    from visual_verify.agent.reader import shares_a_term
+
+    assert shares_a_term("The evaluation uses three metrics.", "the") is False
+
+
+def test_a_genuine_line_of_evidence_is_a_citation():
+    from visual_verify.agent.reader import shares_a_term
+
+    assert (
+        shares_a_term(
+            "The evaluation runs on SlideVQA.", "Evaluation on SlideVQA with three metrics"
+        )
+        is True
+    )
+
+
+def test_an_unknown_region_text_is_not_judged():
+    """A visual region that snapped to a box with no text layer cannot be
+    checked, and an unjudgeable citation must not be called fabricated. Absence
+    of text is absence of evidence about the citation, not evidence against."""
+    from visual_verify.agent.reader import shares_a_term
+
+    assert shares_a_term("Any claim at all.", None) is True
+    assert shares_a_term("Any claim at all.", "   ") is True
