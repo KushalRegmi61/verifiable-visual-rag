@@ -170,10 +170,13 @@ def test_bare_quantifier_openers_are_a_known_miss():
 
 
 def test_a_chained_pair_shares_a_content_word():
-    assert shares_content_word(
-        "The evaluation compares three system variants on SlideVQA.",
-        "Each of the three variants is scored on answer accuracy.",
-    ) is True
+    assert (
+        shares_content_word(
+            "The evaluation compares three system variants on SlideVQA.",
+            "Each of the three variants is scored on answer accuracy.",
+        )
+        is True
+    )
 
 
 def test_two_unrelated_claims_share_nothing():
@@ -182,10 +185,13 @@ def test_two_unrelated_claims_share_nothing():
     shared stopword passes even with `_STOPWORDS` emptied out, by coincidence
     rather than by exercising the guarantee this test exists to pin; this
     phrasing fails under that mutation, as it must."""
-    assert shares_content_word(
-        "The evaluation compares three system variants on SlideVQA.",
-        "The ground truth is derived automatically.",
-    ) is False
+    assert (
+        shares_content_word(
+            "The evaluation compares three system variants on SlideVQA.",
+            "The ground truth is derived automatically.",
+        )
+        is False
+    )
 
 
 def test_a_stopword_overlap_does_not_count_as_chaining():
@@ -200,10 +206,13 @@ def test_a_stopword_overlap_does_not_count_as_chaining():
 def test_a_plural_matches_its_singular():
     """Claims chain through a noun phrase that often changes number across the
     join: "three variants" then "each variant"."""
-    assert shares_content_word(
-        "The evaluation compares three variants.",
-        "Each variant is scored separately.",
-    ) is True
+    assert (
+        shares_content_word(
+            "The evaluation compares three variants.",
+            "Each variant is scored separately.",
+        )
+        is True
+    )
 
 
 def test_punctuation_does_not_block_a_match():
@@ -217,10 +226,13 @@ def test_a_doubled_trailing_s_is_not_over_stripped():
     though a caress and caring about something share no meaning. Stripping at
     most a single trailing character keeps "caress" as "cares", distinct from
     "care"/"cares", and the false match disappears."""
-    assert shares_content_word(
-        "She cares about the outcome.",
-        "He gave a gentle caress.",
-    ) is False
+    assert (
+        shares_content_word(
+            "She cares about the outcome.",
+            "He gave a gentle caress.",
+        )
+        is False
+    )
 
 
 def test_bare_numbers_and_possessive_s_do_not_count_as_chaining():
@@ -229,28 +241,40 @@ def test_bare_numbers_and_possessive_s_do_not_count_as_chaining():
     letter so a bare number token ("3", or "1" from "5.1") is never a content
     word, and a possessive's stray "s" ("document's" -> "document", "s")
     never becomes one either."""
-    assert shares_content_word(
-        "Page 3 lists the evaluation metrics.",
-        "Figure 3 plots the ablation.",
-    ) is False
-    assert shares_content_word(
-        "The rubric defines section 5.1.",
-        "Recall improves by 1 point.",
-    ) is False
-    assert shares_content_word(
-        "The document's title is bold.",
-        "The reader's output is prose.",
-    ) is False
+    assert (
+        shares_content_word(
+            "Page 3 lists the evaluation metrics.",
+            "Figure 3 plots the ablation.",
+        )
+        is False
+    )
+    assert (
+        shares_content_word(
+            "The rubric defines section 5.1.",
+            "Recall improves by 1 point.",
+        )
+        is False
+    )
+    assert (
+        shares_content_word(
+            "The document's title is bold.",
+            "The reader's output is prose.",
+        )
+        is False
+    )
 
 
 def test_each_does_not_count_as_chaining():
-    """"each" appears in essentially every sentence about a set of things and
+    """ "each" appears in essentially every sentence about a set of things and
     carries no topic of its own; two claims about unrelated sets should not
     chain just because both use it."""
-    assert shares_content_word(
-        "Each variant is evaluated separately.",
-        "Each metric is reported once.",
-    ) is False
+    assert (
+        shares_content_word(
+            "Each variant is evaluated separately.",
+            "Each metric is reported once.",
+        )
+        is False
+    )
 
 
 def test_read_warns_when_the_model_returned_bare_strings():
