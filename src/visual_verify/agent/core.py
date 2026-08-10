@@ -74,6 +74,17 @@ def _best_region(
     whose image must go to the verifier: verify() takes ONE image, and judging
     a page-3 region against the page-1 image asks it to check a box that is not
     in front of it, which is a fabricated citation reached by another route.
+
+    KNOWN CONSEQUENCE, recorded rather than fixed. The first page with a text
+    hit wins here, and the citation filter runs afterwards in the caller, so a
+    later page holding a citable text hit is never consulted if the first page's
+    regions are all filtered away. In practice text_regions only matches when
+    the claim's own words are literally on the page, so its regions almost
+    always share a term with the claim; the filter exists for the visual path,
+    where the region can be any box the heatmap liked. Moving the filter in here
+    would fix the ordering and break something worse: S7's ablation needs the
+    grounder measured without it, and ground() must keep meaning "no evidence
+    exists" rather than "the evidence looked unrelated".
     """
     for page in pages:
         # force="text" cannot raise GroundingError. It returns before the
@@ -83,17 +94,27 @@ def _best_region(
         if found:
             return page, found
 
-    best_page: PreparedPage | None = None
+    # Quoted like every other reference to PreparedPage in this module, and
+    # ruff's UP037 is silenced rather than obeyed. Unquoted is correct HERE only
+    # because a local variable annotation is never evaluated, which is a subtler
+    # rule than the one the TYPE_CHECKING import above teaches, and it stops
+    # being true the moment anyone hoists this line into a signature.
+    best_page: "PreparedPage | None" = None  # noqa: UP037
     best_regions: list[GroundedRegion] = []
     best_score = 0.0
     for page in pages:
         try:
-            # Unforced rather than force="visual". The text pass above already
-            # came back empty for every page, so this repeats a search that
-            # cannot succeed and then falls through to the heatmap; keeping it
-            # unforced means this loop asks for "the best region ground() can
-            # find", which is the same question the single-page caller asked
-            # before pages became a list.
+            # Unforced rather than force="visual", and it does cost something:
+            # ground() re-enters text_regions() for a claim the loop above
+            # already proved matches no page's text layer, so this is one
+            # redundant span search per page per claim. Measured against what
+            # it sits next to (a GPU embed of the claim, then a reader call and
+            # a verifier call), that is noise, and keeping it unforced means
+            # this loop asks ground() for "the best region you can find", which
+            # is the same question the single-page caller asked before pages
+            # became a list. force="visual" would make this loop the only place
+            # in the system that decides the text path is unavailable, which is
+            # a decision ground() owns.
             regions = ground(
                 claim,
                 page.boxes,

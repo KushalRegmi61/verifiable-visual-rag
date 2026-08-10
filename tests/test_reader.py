@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from helpers import claim_list
-from visual_verify.agent.reader import is_compound, opens_with_anaphora, read, shares_content_word
+from visual_verify.agent.reader import (
+    PROMPT,
+    is_compound,
+    opens_with_anaphora,
+    read,
+    shares_content_word,
+)
 from visual_verify.agent.schemas import ClaimList
 from visual_verify.agent.types import FakeChat
 
@@ -39,6 +45,19 @@ def test_read_sends_every_page_it_was_given_in_order():
     read(chat, [Path("p0.png"), Path("p1.png"), Path("p2.png")], "q")
 
     assert chat.calls[0].image_paths == [Path("p0.png"), Path("p1.png"), Path("p2.png")]
+
+
+def test_the_prompt_forbids_the_model_naming_a_page():
+    """The only thing standing between the model and an unverifiable "on page 2"
+    inside displayed prose.
+
+    Grounding decides which page a claim came from, by searching the pages
+    themselves; the reader is never asked. A page named in the prose is not
+    checked by anything, is not what the citation panel shows, and would be
+    displayed next to a region on a different page. This is a bare string in a
+    prompt, so a rewrite can delete it without any other test noticing.
+    """
+    assert "Do not say which page" in PROMPT
 
 
 def test_read_returns_an_empty_list_when_the_page_answers_nothing():

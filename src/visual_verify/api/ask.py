@@ -135,10 +135,18 @@ class AskRequest(BaseModel):
         return self
 
 
+# Scoped to THE PAGE ON SCREEN, and worded that way deliberately. It used to
+# say "grounding can only use the text layer", which stopped being true once an
+# answer grounded against three pages: with this page unembedded and page 2
+# embedded, grounding is actively using page 2's heatmap while the banner
+# announces there is no visual path at all. The embedder gate in ask_events
+# asks whether ANY prepared page has vectors, so the old copy contradicted the
+# code three lines below it.
 UNEMBEDDED_WARNING = (
-    "This page is not embedded, so grounding can only use the text layer. Any "
-    "claim the reader paraphrases rather than quotes verbatim will come back as "
-    "insufficient_evidence. Run `vvrag embed` on this document to fix it."
+    "The page shown is not embedded, so a claim grounded to it can only use its "
+    "text layer. Any such claim the reader paraphrases rather than quotes "
+    "verbatim will come back as insufficient_evidence. Run `vvrag embed` on this "
+    "document to fix it."
 )
 
 
@@ -269,7 +277,6 @@ def ask_events(
         raise NoPagesIndexed("no pages indexed; run `vvrag embed --all` first")
 
     retrieved = _choose_pages(request, session, index, embedder, settings)
-    prepared = retrieved.page
 
     # prepare_page returns page_vectors=None for a page that was ingested but
     # never embedded. Serving it text-only is right for a service, but it
@@ -281,11 +288,23 @@ def ask_events(
     # other document is indexed. The CLI warns and skips the embedder; this is
     # the same handling on the surface a user actually sees.
     #
-    # The TOP page only, deliberately. It is the page on screen and the one the
-    # warning's advice is about, and a document is embedded or it is not, so
-    # testing every prepared page would fire the same banner for the same reason
-    # and only make it easier to ignore.
-    if prepared.page_vectors is None:
+    # The TOP page only. It is the page on screen and the one the advice is
+    # about, and test_the_warning_follows_the_top_page_not_any_prepared_page
+    # pins that: firing because some other prepared page lacks vectors would
+    # tell a user to embed a document whose visible page is embedded.
+    #
+    # The old defence for it, "a document is embedded or it is not", was wrong
+    # and is deliberately not repeated: `vvrag embed` runs page by page and can
+    # be interrupted, which is exactly why answer_stream catches GroundingError
+    # per page. What changed instead is the WORDING, because the copy, not the
+    # predicate, was what contradicted the embedder gate below.
+    #
+    # KNOWN GAP, recorded rather than fixed here. A run whose top page is
+    # embedded and whose second and third are not stays silent, and a claim
+    # grounded to one of those pages still comes back insufficient_evidence
+    # with nothing explaining why. Closing it means the banner naming the
+    # pages, which is a copy and UI decision, not a one-line predicate swap.
+    if retrieved.page.page_vectors is None:
         retrieved = replace(retrieved, warning=UNEMBEDDED_WARNING)
 
     threshold = request.threshold if request.threshold is not None else settings.abstain_threshold

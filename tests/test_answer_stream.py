@@ -660,3 +660,39 @@ def test_no_pages_is_refused_before_anything_is_read():
 
     with pytest.raises(AgentError):
         answer_stream("q", [], reader_chat=reader, verifier_chat=verifier)
+
+
+def test_two_text_hits_break_the_tie_by_retrieval_order_not_page_number():
+    """Both pages match the claim verbatim, so both score EXACT = 1.0. The one
+    retrieval ranked first wins, and `pages` must never be sorted.
+
+    Page numbers DESCEND against list order on purpose, and that is the whole
+    point of the test. Every other multi-page fixture in this file is
+    [page=0, page=1], where pages[0], min(page_no) and sorted(pages)[0] all name
+    the same page, so a tidy-up to `for page in sorted(pages, key=page_no)`
+    passes the entire suite while silently citing the wrong page. This project
+    has now shipped that shape twice: the S3 patch grid, where a transposition
+    survived because the fixture was square, and the S6 toStyle test, which
+    passed under the transposition it was written to catch. Ascending
+    expectations do not test ordering.
+    """
+    pages = [
+        prepared(page_boxes(), page=7, image="p7.png"),
+        prepared(page_boxes(), page=2, image="p2.png"),
+    ]
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
+    verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
+
+    out = answer(
+        "q",
+        pages,
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+    )
+
+    regions = out.claims[0].regions
+    assert [r.page for r in regions] == [7], "the tie must break by rank, not by page number"
+    # The verifier follows the winner. A sort would send it p2.png, and it
+    # would judge a page-7 box against page 2's image without complaining.
+    assert verifier.calls[0].image_paths == [Path("p7.png")]
