@@ -249,6 +249,30 @@ def test_ask_result_shows_withheld_section_and_abstention_line_when_all_withheld
     assert out.index("Withheld") < out.index("abstained: the question")
 
 
+def test_ask_result_shows_an_unverified_claim_in_the_withheld_section(capsys):
+    """A claim that never reached the verifier (no label, abstained=False) is
+    `withheld` but not `abstained`. Filtering the withheld section on
+    `c.abstained` instead of `c.withheld` dropped it from both the shown and
+    the withheld list, so it vanished from the transcript entirely: the one
+    outcome this CLI's docstring says it exists to prevent.
+    """
+    from visual_verify.cli import _print_ask_result
+    from visual_verify.contracts import Answer, Claim
+
+    result = Answer(
+        question="q",
+        claims=[Claim(text="Never reached the verifier.", confidence=0.0)],
+    )
+
+    _print_ask_result(result, 6.0)
+    out = capsys.readouterr().out
+
+    assert "Answer (0 claim(s) shown):" in out
+    assert "Withheld (1 claim(s), not part of the answer):" in out
+    assert "Never reached the verifier." in out
+    assert out.index("Withheld") < out.index("Never reached the verifier.")
+
+
 def test_ask_result_prints_the_threshold_before_the_answer_heading(capsys):
     """A transcript at --threshold 0 would otherwise be structurally identical
     to a fully verified run: unsupported claims land under the same "Answer"

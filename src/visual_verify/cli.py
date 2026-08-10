@@ -461,8 +461,12 @@ def cmd_ground(args: argparse.Namespace) -> int:
 
 
 def _print_claim(c: Claim, indent: str) -> None:
+    # label is None until the verifier runs; a claim that never reached it
+    # (now correctly included below, see the withheld comment above) would
+    # otherwise crash `:<22` formatting on NoneType instead of printing.
+    label = c.label if c.label is not None else "unverified"
     flag = " [compound]" if c.compound else ""
-    print(f"{indent}{c.label:<22} {c.confidence:.2f}  {c.text}{flag}")
+    print(f"{indent}{label:<22} {c.confidence:.2f}  {c.text}{flag}")
     for r in c.regions:
         x0, y0, x1, y1 = r.bbox
         box = f"[{x0:.3f} {y0:.3f} {x1:.3f} {y1:.3f}]"
@@ -490,7 +494,13 @@ def _print_ask_result(result: Answer, threshold: float) -> None:
     "Answer" heading with no marker of how permissive the gate was.
     """
     shown = result.shown
-    withheld = [c for c in result.claims if c.abstained]
+    # withheld must be the complement of shown, both read from Claim.withheld.
+    # Filtering on `c.abstained` instead is a second, narrower predicate: a
+    # claim that never reached the verifier (label=None, abstained=False) is
+    # not `abstained` but is `withheld`, so it fell out of BOTH lists and
+    # vanished from the transcript instead of appearing under "Withheld", which
+    # is exactly the outcome this docstring says the CLI exists to avoid.
+    withheld = [c for c in result.claims if c.withheld]
 
     print(f"threshold: {threshold}")
     print(f"Answer ({len(shown)} claim(s) shown):")
