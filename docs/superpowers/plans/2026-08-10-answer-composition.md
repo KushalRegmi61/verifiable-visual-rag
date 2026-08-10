@@ -681,9 +681,12 @@ def test_a_chained_pair_shares_a_content_word():
 def test_two_unrelated_claims_share_nothing():
     from visual_verify.agent.reader import shares_content_word
 
+    # Both sentences carry a leading "the" on purpose. Without it the pair
+    # shares no stopword either, so the assertion passes even with the stopword
+    # list emptied, and the mutation check below proves nothing.
     assert shares_content_word(
         "The evaluation compares three system variants on SlideVQA.",
-        "Ground truth is derived automatically.",
+        "The ground truth is derived automatically.",
     ) is False
 
 
@@ -741,7 +744,10 @@ _WORD = re.compile(r"[a-z0-9]+")
 def _content_words(text: str) -> set[str]:
     """Lowercased words with stopwords dropped and a trailing s stripped."""
     words = _WORD.findall(text.lower())
-    return {w.rstrip("s") or w for w in words if w not in _STOPWORDS}
+    # A single trailing character, not rstrip("s"), which strips the whole run:
+    # "caress" would collapse to "care" and collide with "cares", inventing a
+    # chain between two unrelated sentences.
+    return {w[:-1] if w.endswith("s") and len(w) > 1 else w for w in words if w not in _STOPWORDS}
 
 
 def shares_content_word(previous: str, claim: str) -> bool:
@@ -779,7 +785,15 @@ Temporarily set `_STOPWORDS = frozenset()` and re-run.
 find . -name __pycache__ -not -path "./.venv/*" -exec rm -rf {} +
 uv run pytest tests/test_reader.py -k shares_content -v
 ```
-Expected: `test_a_stopword_overlap_does_not_count_as_chaining` and `test_two_unrelated_claims_share_nothing` both FAIL. Restore the list, clear caches, confirm 5 passed.
+Expected: `test_a_stopword_overlap_does_not_count_as_chaining` and
+`test_two_unrelated_claims_share_nothing` both FAIL. Restore the list, clear
+caches, confirm they pass again.
+
+The second of those only fails because both its sentences begin with "the". An
+earlier draft of this plan had the second sentence starting with "Ground", so
+the pair shared no stopword, the assertion held with the list emptied, and the
+mutation silently proved nothing about that test. If you change the fixtures,
+keep a shared stopword and no shared content word, or the check goes hollow.
 
 - [ ] **Step 6: Commit**
 
