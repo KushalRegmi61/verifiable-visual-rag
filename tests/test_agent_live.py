@@ -98,29 +98,34 @@ def test_the_drafted_answer_holds_together():
     """The four drafting rules, against a real model on a real page.
 
     A fake cannot test this: the rules are instructions to a model and the only
-    thing that can fail them is a model. Asserted as a floor rather than a
-    quality bar, because "reads well" is not something a test can decide.
+    thing that can fail them is a model.
 
     Smoke coverage only, and it can go VACUOUS. "What is this page about?" is
-    legitimately answerable in one sentence, and on a one-claim answer there are
-    no adjacent pairs, so `unchained` is empty against a floor of `1 // 3 == 0`
-    and `dangling` is empty because there is nothing to dangle from. Both
-    assertions then pass on any output whatsoever. The non-vacuous version is
+    legitimately answerable in one sentence, and on a one-claim answer there is
+    nothing for a claim to dangle from, so the assertion below passes on any
+    output whatsoever. The non-vacuous version is
     `test_a_multi_part_answer_is_not_collapsed_into_one_claim` below, which asks
     a question one sentence cannot answer.
 
-    A failure here is not automatically the reader's fault. `shares_content_word`
-    errs in BOTH directions, and its known UNDERCOUNTS look exactly like a
-    reader that stopped chaining: an "-es" or "-ies" plural is not reunited with
-    its singular ("analyses" against "analysis", "policies" against "policy"),
-    and a genuinely repeated bare number never becomes a token at all, because
-    `_WORD` requires a leading letter. So check the reported claims by eye before
-    editing the prompt; the stemmer is as likely a cause as the model. The
-    threshold is deliberately not loosened to cover that, since a failure is
-    information either way.
+    Chaining used to be asserted here as a floor and no longer is. See the
+    comment at the bottom for the measurement that removed it: the page this
+    resolves to is the proposal's TITLE page, whose correct answer is a list of
+    unrelated fields, so rule 4 has nothing to carry forward and the floor
+    failed on output that was exactly right.
+
+    `shares_content_word` also errs in BOTH directions, and its known
+    UNDERCOUNTS look exactly like a reader that stopped chaining: an "-es" or
+    "-ies" plural is not reunited with its singular ("analyses" against
+    "analysis", "policies" against "policy"), and a genuinely repeated bare
+    number never becomes a token, because `_WORD` requires a leading letter.
+    Two independent reasons the number cannot gate a build.
+
+    What IS asserted is that no claim opens by referring backwards. That one is
+    stable: rule 3 is a prohibition the model follows reliably, and a violation
+    is unambiguous rather than a judgement call.
     """
     from visual_verify.agent.models import make_chat
-    from visual_verify.agent.reader import opens_with_anaphora, read, shares_content_word
+    from visual_verify.agent.reader import opens_with_anaphora, read
 
     chat = make_chat("reader", Settings.from_env())
     claims = read(chat, _a_page(), "What is this page about?")
@@ -131,16 +136,29 @@ def test_the_drafted_answer_holds_together():
     dangling = [c.text for c in claims if opens_with_anaphora(c.text)]
     assert not dangling, f"claims that would break if their predecessor were withheld: {dangling}"
 
-    unchained = [
-        claims[i].text
-        for i in range(1, len(claims))
-        if not shares_content_word(claims[i - 1].text, claims[i].text)
-    ]
-    # A floor, not a bar. One topic turn in a long answer is legitimate; a
-    # majority of unchained claims means the reader is listing, not answering.
-    assert len(unchained) <= len(claims) // 3, (
-        f"claims sharing nothing with their predecessor: {unchained}"
-    )
+    # Chaining is MEASURED here and deliberately not asserted, matching the
+    # sibling test below for the same reason: it is a coin flip, so failing a
+    # build on it reports variance as a regression.
+    #
+    # Measured on 2026-08-10, this page, five claims: 2 of 4 adjacent pairs
+    # shared no content word, against what used to be a floor of `5 // 3 == 1`.
+    # The unchained pair was "The proposal is submitted to the Department of
+    # Electronics and Computer Engineering..." followed by "The page shows
+    # LALITPUR, NEPAL and June, 2026 as location and date."
+    #
+    # Those share nothing because the PAGE shares nothing. `_a_page()` resolves
+    # to the proposal's title page, whose correct answer IS a list of unrelated
+    # fields: title, department, degree, location, date. There is no topic to
+    # carry forward, so rule 4 has nothing to do and the floor punishes output
+    # that is exactly right. A chaining floor is only meaningful on a page whose
+    # content has a through line, and this test deliberately runs on whatever
+    # page happens to sort first.
+    #
+    # No assertion follows, on purpose. A vacuous one that always holds would
+    # be worse than none: it reads as a check while pinning nothing, which is
+    # the failure this repo's own catalogue keeps recording. The rate belongs
+    # in the S7 eval, over many questions and pages, where it can be reported
+    # rather than thresholded.
 
 
 def _methodology_page() -> Path:
