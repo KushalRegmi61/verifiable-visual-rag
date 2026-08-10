@@ -15,7 +15,8 @@ import { EvidenceVault } from "@/components/EvidenceVault";
 import { PageRail } from "@/components/PageRail";
 import { PageViewer } from "@/components/PageViewer";
 import { ZoomOverlay } from "@/components/ZoomOverlay";
-import { AlertIcon, SearchIcon } from "@/components/icons";
+import { AlertIcon } from "@/components/icons";
+import { AskComposer } from "@/components/AskComposer";
 
 /** Everything one page's answer is made of. */
 type PageResult = {
@@ -208,36 +209,12 @@ export default function Home() {
             </p>
           </div>
 
-          <form
-            className="flex flex-1 items-center gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run(question);
-            }}
-          >
-            <div className="relative flex-1">
-              <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-              <label htmlFor="question" className="sr-only">
-                Question
-              </label>
-              <input
-                id="question"
-                className="h-10 w-full rounded-full border border-border bg-surface pl-9 pr-4 text-sm outline-none transition-colors duration-150 placeholder:text-faint focus:border-accent"
-                placeholder="Ask a question about an indexed document"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                disabled={pending}
-                autoComplete="off"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={pending || !question.trim()}
-              className="h-10 shrink-0 cursor-pointer rounded-full bg-accent px-5 text-sm font-medium text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-default disabled:opacity-40"
-            >
-              {pending ? "Working" : "Ask"}
-            </button>
-          </form>
+          <AskComposer
+            value={question}
+            onChange={setQuestion}
+            onSubmit={() => void run(question)}
+            pending={pending}
+          />
         </div>
         {pending && (
           <div className="h-0.5 w-full overflow-hidden bg-transparent">
