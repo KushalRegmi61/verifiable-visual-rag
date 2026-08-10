@@ -21,6 +21,18 @@ from visual_verify.contracts import LEAD_INDEX, Claim, GroundedRegion
 
 def _region(r: GroundedRegion) -> dict:
     return {
+        # Which page this region is on, which is NOT always the page retrieval
+        # ranked first. The reader sees several pages of one document and every
+        # claim is grounded against all of them, so the winning region can be on
+        # any of them. Without this the frontend cannot tell them apart: it
+        # filters regions by page before drawing, so an absent field makes
+        # `r.page === page` false for every region and NO box is drawn at all.
+        # That is the loud failure and it is the right one, because the
+        # tolerant alternative, treating an absent page as the page on screen,
+        # would draw a page-19 box over page-14 text at the same coordinates.
+        # A misplaced box on the wrong page is a fabricated citation, which is
+        # the one thing this project exists to refuse.
+        "page": r.page,
         "bbox": list(r.bbox),
         "score": r.score,
         "modality": r.modality,

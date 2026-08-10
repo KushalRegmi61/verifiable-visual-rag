@@ -310,3 +310,32 @@ def test_a_surviving_lead_does_not_announce_an_abstention():
     _, payload = to_frame(ClaimVerified(index=0, claim=shown_claim()))
 
     assert payload["abstains_answer"] is False
+
+
+def test_a_region_says_which_page_it_is_on():
+    """The reader sees several pages and a claim is grounded against all of
+    them, so the winning region is not always on the retrieved page. The
+    frontend filters regions by page before drawing, so omitting this draws no
+    boxes at all, and defaulting it to the page on screen would draw a page-19
+    box over page-14 text at the same coordinates, which is a fabricated
+    citation rather than a missing one.
+    """
+    elsewhere = GroundedRegion(
+        page=19,
+        bbox=(0.1, 0.2, 0.3, 0.4),
+        score=1.0,
+        modality="text",
+        text="on another page",
+        resolution="line",
+    )
+    claim = Claim(
+        text="Grounded away from the retrieved page",
+        regions=[elsewhere],
+        confidence=0.9,
+        label="supported",
+        reason="stated there",
+    )
+
+    _, payload = to_frame(ClaimVerified(index=0, claim=claim))
+
+    assert payload["regions"][0]["page"] == 19
