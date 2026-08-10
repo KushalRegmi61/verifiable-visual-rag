@@ -6,6 +6,12 @@ import { colourFor, groupIntoParagraphs } from "@/lib/claims";
 type Props = {
   shown: ClaimEvent[];
   done: DoneEvent | null;
+  // Its own prop rather than `done.withheld`, which this panel already
+  // receives. `done` only arrives when the stream finishes, so a count read
+  // from it would sit at zero for the whole verification pass and then jump at
+  // the end, which reads as the system having changed its mind. The live count
+  // comes from the claims already in hand.
+  withheldCount: number;
   hovered: number | null;
   onHover: (index: number | null) => void;
   onSelect: (index: number) => void;
@@ -28,7 +34,14 @@ type Props = {
  * traversable instead of being smoothed into one paragraph of unattributed
  * text.
  */
-export function AnswerPanel({ shown, done, hovered, onHover, onSelect }: Props) {
+export function AnswerPanel({
+  shown,
+  done,
+  withheldCount,
+  hovered,
+  onHover,
+  onSelect,
+}: Props) {
   return (
     <section
       aria-labelledby="answer-heading"
@@ -93,6 +106,19 @@ export function AnswerPanel({ shown, done, hovered, onHover, onSelect }: Props) 
           })}
         </p>
       ))}
+
+      {/* Says only what this system did, never what the page contains. "I could
+          not confirm it" is introspection and is true by construction whenever
+          it is shown; "the page does not say so" would be a claim about the
+          world with no region behind it. The header keeps its `N verified, M
+          withheld` chip, which is the technical reading of the same fact; this
+          is the conversational one, and both are wanted. */}
+      {withheldCount > 0 && (
+        <p className="mt-4 text-sm italic text-muted">
+          I left out {withheldCount} statement{withheldCount === 1 ? "" : "s"} I could not
+          confirm against this page.
+        </p>
+      )}
 
       <p className="mt-4 border-t border-border pt-3 text-xs leading-relaxed text-faint">
         Each sentence above was checked by a second model and carries its own

@@ -260,20 +260,37 @@ export default function Home() {
               )}
 
               {abstained && (
-                <div className="mb-4 rounded-2xl border-2 border-warn/50 bg-warn-soft px-5 py-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warn">
-                    No answer given
-                  </p>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted">
-                    The verifier rejected every claim the reader produced, so the system is
-                    declining to answer rather than showing something it cannot support.
+                <div className="mb-4 rounded-2xl border border-border bg-surface p-5">
+                  <h2 className="text-base font-semibold">
+                    I could not answer this from this page
+                  </h2>
+                  <p className="mt-2 text-sm leading-relaxed text-muted">
+                    {/* Only ever a statement about this system's own process.
+                        "I could not confirm" is true by construction whenever
+                        this is shown. A sentence about what the page does or
+                        does not contain would be a claim with no region behind
+                        it, which is precisely what the rest of the system
+                        exists to refuse. */}
+                    I read {retrieved?.doc_name} page {retrieved?.page}, but I was not able
+                    to confirm an answer to your question from what is on it. Rather than
+                    give you something I cannot stand behind, I have left it out.
                     {/* Without this, an unembedded page reads as a judgement about
                         the evidence when the real cause is that nobody ran
                         `vvrag embed`. */}
                     {retrieved?.warning &&
-                      " Note the warning above: this page has no embeddings, so that" +
-                        " rejection is very likely a missing index rather than weak evidence."}
+                      " Note the warning above: this page has no embeddings, so that is" +
+                        " very likely a missing index rather than weak evidence."}
                   </p>
+                  {/* Under the lead rule, abstaining no longer means nothing
+                      survived: a withheld first claim abstains the answer even
+                      when later claims passed. Those survivors stay in the
+                      Evidence Vault below, which already presents them as
+                      evidence rather than as an answer. */}
+                  {shown.length > 0 && (
+                    <p className="mt-3 text-sm italic text-muted">
+                      Here is what I was able to confirm from the page, in case it helps.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -288,10 +305,17 @@ export default function Home() {
                 </div>
               )}
 
-              {shown.length > 0 && (
+              {/* `!abstained` because the lead rule made `shown.length > 0 &&
+                  abstained` reachable: a withheld first claim abstains the
+                  answer while later claims survive. Without the guard the page
+                  renders the decline and a panel headed "Answer" at the same
+                  time, telling the user both that there is no answer and that
+                  this is it. */}
+              {shown.length > 0 && !abstained && (
                 <AnswerPanel
                   shown={shown}
                   done={done}
+                  withheldCount={withheld.length}
                   hovered={hovered}
                   onHover={setHovered}
                   onSelect={revealClaim}
