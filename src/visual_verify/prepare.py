@@ -147,3 +147,40 @@ def prepare_page(
         page_vectors=vectors,
         grid=grid,
     )
+
+
+def prepare_pages(
+    session: Session,
+    index,
+    settings: Settings,
+    hits,
+    limit: int = 3,
+) -> list[PreparedPage]:
+    """The top `limit` retrieved pages that belong to the TOP HIT's document.
+
+    `hits` is whatever QdrantIndex.search returned: anything with `doc_id` and
+    `page`. Retrieval is corpus-wide and takes no document filter, so the raw
+    top 3 routinely spans documents, and pages from anything but the top hit's
+    document are dropped rather than read.
+
+    Two reasons, both load-bearing. A GroundedRegion carries `page` and no
+    document identity, and the frontend builds its page image URL from the
+    answer's doc_sha plus that page, so a region on another document's page
+    would be drawn on the wrong image with nothing saying so. And merging two
+    documents into one answer without disclosing it contradicts the whole point
+    of a system that shows where each sentence came from. Cross-document is a
+    later slice and needs GroundedRegion.doc_sha first.
+
+    Retrieval ORDER is preserved, never page order. Grounding breaks ties
+    between pages by rank, so sorting or de-duplicating through a set would
+    silently change which page a claim gets cited to, and the result would
+    still look like a perfectly ordinary answer.
+    """
+    if not hits:
+        return []
+
+    top_doc = hits[0].doc_id
+    same_document = [h for h in hits if h.doc_id == top_doc][:limit]
+    return [
+        prepare_page(session, index, settings, doc=top_doc, page_no=h.page) for h in same_document
+    ]

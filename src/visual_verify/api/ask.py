@@ -48,10 +48,15 @@ from visual_verify.agent.rubric import SCORE_CEILING
 from visual_verify.agent.types import StructuredChat
 from visual_verify.config import Settings
 from visual_verify.contracts import RetrievedPage
-from visual_verify.prepare import PreparedPage, prepare_page
+from visual_verify.prepare import PreparedPage, prepare_page, prepare_pages
 from visual_verify.store.models import Document
 
 DEFAULT_K = 5
+# How many pages of the top hit's document are prepared and read. Smaller than
+# DEFAULT_K on purpose: retrieval ranks k pages so the reader has something to
+# choose between, but every prepared page costs a Qdrant round trip and an image
+# in the reader's prompt, and the pages past the third rarely support a claim.
+DEFAULT_PAGES = 3
 
 
 class NoPagesIndexed(RuntimeError):
@@ -143,6 +148,11 @@ class Retrieved:
 
     page: PreparedPage
     score: float | None
+    # Every page that was prepared, in retrieval order, all from `page`'s
+    # document. `page` stays the top one because the wire event and the UI's
+    # initial view are built from it; `pages` is what grounding searches, so a
+    # claim can be cited to whichever page actually supports it.
+    pages: list[PreparedPage] = field(default_factory=list)
     candidates: list[RetrievedPage] = field(default_factory=list)
     warning: str | None = None
     # sha -> document name, for the candidates only. Retrieval is corpus-wide
@@ -152,25 +162,40 @@ class Retrieved:
     # screen, and clicking it silently swaps the document under the user.
     doc_names: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        # A Retrieved always has at least the page it names. Defaulting here
+        # rather than at each construction site keeps `pages[0] is page` true
+        # for every one of them, including the pinned branch and any caller that
+        # only cares about the top page: an empty list would otherwise read to
+        # anything iterating `pages` as "nothing was prepared", and grounding
+        # would find no evidence on a page that is sitting right there.
+        if not self.pages:
+            object.__setattr__(self, "pages", [self.page])
+
 
 AskEvent = Retrieved | AnswerEvent
 
 
-def _choose_page(
+def _choose_pages(
     request: AskRequest,
     session: Session,
     index,
     embedder,
     settings: Settings,
 ) -> Retrieved:
-    """Resolve the request to one prepared page, however it was addressed.
+    """Resolve the request to the pages that will be read, however it was
+    addressed.
 
-    Split out of ask_events so the page is bound by a return value rather than
+    Split out of ask_events so the pages are bound by a return value rather than
     by both arms of an if/else agreeing to assign the same local.
+
+    A pinned request gets exactly the page it pinned. The caller named one page,
+    usually by clicking a candidate chip, so widening it to the neighbours would
+    answer a question the user did not ask.
     """
     if request.doc is not None and request.page is not None:
         prepared = prepare_page(session, index, settings, doc=request.doc, page_no=request.page)
-        return Retrieved(page=prepared, score=None, candidates=[])
+        return Retrieved(page=prepared, score=None, pages=[prepared], candidates=[])
 
     hits = index.search(
         embedder.embed_query(request.question), embedder.provenance, limit=request.k
@@ -178,11 +203,15 @@ def _choose_page(
     if not hits:
         raise NoPagesIndexed("retrieval returned no pages")
     top = hits[0]
-    prepared = prepare_page(session, index, settings, doc=top.doc_id, page_no=top.page)
+    # Only the top hit's document. hits[1:] still reports every candidate,
+    # including those from other documents, because the chips are a way to
+    # re-ask elsewhere; they are just not read into this answer.
+    pages = prepare_pages(session, index, settings, hits, limit=DEFAULT_PAGES)
     candidates = list(hits[1:])
     return Retrieved(
-        page=prepared,
+        page=pages[0],
         score=top.score,
+        pages=pages,
         candidates=candidates,
         doc_names=_names_for({c.doc_id for c in candidates}, session),
     )
@@ -221,7 +250,7 @@ def ask_events(
     if index.count() == 0:
         raise NoPagesIndexed("no pages indexed; run `vvrag embed --all` first")
 
-    retrieved = _choose_page(request, session, index, embedder, settings)
+    retrieved = _choose_pages(request, session, index, embedder, settings)
     prepared = retrieved.page
 
     # prepare_page returns page_vectors=None for a page that was ingested but
@@ -233,6 +262,11 @@ def ask_events(
     # that nobody ran `vvrag embed`. index.count() cannot catch this once any
     # other document is indexed. The CLI warns and skips the embedder; this is
     # the same handling on the surface a user actually sees.
+    #
+    # The TOP page only, deliberately. It is the page on screen and the one the
+    # warning's advice is about, and a document is embedded or it is not, so
+    # testing every prepared page would fire the same banner for the same reason
+    # and only make it easier to ignore.
     if prepared.page_vectors is None:
         retrieved = replace(retrieved, warning=UNEMBEDDED_WARNING)
 

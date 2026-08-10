@@ -294,6 +294,111 @@ def test_candidates_from_another_document_carry_its_name(indexed):
         assert retrieved.doc_names[cand.doc_id].endswith(".pdf")
 
 
+@pytest.fixture
+def two_indexed(tmp_path, monkeypatch, multipage_pdf):
+    """A three-page document and a one-page document from somewhere else.
+
+    Retrieval is corpus-wide and takes no document filter, so with both indexed
+    the raw top k really can straddle them, which is the case prepare_pages
+    exists to refuse.
+    """
+    import fitz
+
+    monkeypatch.setenv("VVRAG_DB_URL", f"sqlite:///{tmp_path / 'm.db'}")
+    monkeypatch.setenv("VVRAG_DATA_DIR", str(tmp_path / "datam"))
+    monkeypatch.setenv("VVRAG_QDRANT_URL", ":memory:")
+    monkeypatch.delenv("VVRAG_QDRANT_API_KEY", raising=False)
+    monkeypatch.setenv("VVRAG_FAKE_EMBEDDER", "1")
+
+    other = tmp_path / "other.pdf"
+    doc = fitz.open()
+    doc.new_page(width=612.0, height=792.0).insert_text((72.0, 100.0), "Other doc", fontsize=12)
+    doc.save(other)
+    doc.close()
+
+    assert main(["ingest", str(multipage_pdf)]) == 0
+    assert main(["ingest", str(other)]) == 0
+    assert main(["embed", "--all"]) == 0
+    return Settings.from_env()
+
+
+def test_the_top_pages_of_one_document_are_prepared(two_indexed):
+    """A claim can be grounded on whichever page supports it, so more than the
+    top page is prepared. All of them come from the top hit's document:
+    GroundedRegion carries `page` and no document identity, so a region on
+    another document's page would be drawn on the wrong image."""
+    events = run(two_indexed, AskRequest(question="What happened?"))
+
+    retrieved = events[0]
+    assert len(retrieved.pages) > 1, "only the top page was prepared"
+    assert {p.doc_sha for p in retrieved.pages} == {retrieved.page.doc_sha}
+    assert len({p.page_no for p in retrieved.pages}) == len(retrieved.pages)
+
+
+def test_the_top_page_is_still_the_first_prepared_page(two_indexed):
+    """The wire event and the UI's initial view are built from `page`. If it
+    stopped being pages[0], the image on screen would be one page and the
+    answer's leading citation another, with nothing saying so."""
+    retrieved = run(two_indexed, AskRequest(question="What happened?"))[0]
+
+    assert retrieved.pages[0] is retrieved.page
+
+
+def test_no_more_than_the_page_limit_is_prepared(two_indexed):
+    """k is 5 and DEFAULT_PAGES is 3. Every prepared page is a Qdrant round trip
+    and, later, an image in the reader's prompt."""
+    from visual_verify.api.ask import DEFAULT_PAGES
+
+    retrieved = run(two_indexed, AskRequest(question="What happened?", k=5))[0]
+
+    assert len(retrieved.pages) <= DEFAULT_PAGES
+
+
+def test_a_pinned_request_prepares_only_the_page_it_pinned(two_indexed):
+    """The caller named one page, usually by clicking a candidate chip.
+    Widening it to the neighbours would answer a question nobody asked, and the
+    answer would cite a page the user did not choose."""
+    doc = run(two_indexed, AskRequest(question="q"))[0].page.doc_sha
+
+    events = run(two_indexed, AskRequest(question="q", doc=doc, page=1), wrap=NoSearchIndex)
+
+    assert [p.page_no for p in events[0].pages] == [1]
+
+
+class UnembeddedExcept:
+    """Embedded everywhere except the pages named, so the warning's trigger can
+    be moved off the top page and back onto it."""
+
+    def __init__(self, inner, unembedded):
+        self._inner = inner
+        self._unembedded = unembedded
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def get_payload_or_none(self, doc_sha, page_no):
+        if page_no in self._unembedded:
+            return None
+        return self._inner.get_payload_or_none(doc_sha, page_no)
+
+
+def test_the_warning_follows_the_top_page_not_any_prepared_page(two_indexed):
+    """It is the page on screen and the one the advice is about. Firing it
+    because some other prepared page lacks vectors would tell a user to run
+    `vvrag embed` on a document that is embedded."""
+    from visual_verify.api.ask import UNEMBEDDED_WARNING
+
+    top = run(two_indexed, AskRequest(question="q"))[0].page.page_no
+    others = {p.page_no for p in run(two_indexed, AskRequest(question="q"))[0].pages} - {top}
+    assert others, "the fixture must prepare more than one page for this to mean anything"
+
+    quiet = run(two_indexed, AskRequest(question="q"), wrap=lambda i: UnembeddedExcept(i, others))
+    loud = run(two_indexed, AskRequest(question="q"), wrap=lambda i: UnembeddedExcept(i, {top}))
+
+    assert quiet[0].warning is None
+    assert loud[0].warning == UNEMBEDDED_WARNING
+
+
 def test_a_pinned_request_needs_no_names(indexed):
     """The pinned branch reports no candidates, so it must not pay for the
     lookup either."""
