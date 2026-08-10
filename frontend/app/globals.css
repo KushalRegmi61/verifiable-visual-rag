@@ -1,26 +1,130 @@
 @import "tailwindcss";
 
+/* Semantic tokens rather than raw hex in components, so light and dark are
+   defined once and every surface moves together. The palette is document grey
+   plus scan blue: the page image is the loudest thing on screen and always
+   white, so the chrome around it stays desaturated and lets the evidence
+   colours carry all the meaning. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --background: #f4f6f8;
+  --surface: #ffffff;
+  --surface-sunken: #eef1f5;
+  --foreground: #0f172a;
+  --muted: #55606f;
+  --faint: #7d8796;
+  --border: #dde2e9;
+  --border-strong: #c3cad4;
+  --accent: #1d4ed8;
+  --accent-soft: #eaf0ff;
+  --ok: #046c4e;
+  --warn: #92400e;
+  --warn-soft: #fef3c7;
+  --danger: #b42318;
+  --ring: #1d4ed8;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #0b0f16;
+    --surface: #131924;
+    --surface-sunken: #0e131c;
+    --foreground: #e9edf4;
+    /* Lightened rather than inverted. The light-mode muted grey lands at 2.6:1
+       on this background, under the 4.5:1 body-text floor. */
+    --muted: #a3adbd;
+    --faint: #7b8697;
+    --border: #232c3a;
+    --border-strong: #35415380;
+    --accent: #7aa2ff;
+    --accent-soft: #16213a;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --warn-soft: #2a2110;
+    --danger: #fca5a5;
+    --ring: #7aa2ff;
   }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-sunken: var(--surface-sunken);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Was hardcoded to Arial, which overrode the Geist variables the layout goes
+     to the trouble of loading. */
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* One focus treatment for the whole app. The default ring is removed by several
+   of the utility combinations used here, and an invisible focus ring is the
+   single most common way a keyboard user loses their place. */
+:where(a, button, input, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Tabular figures for scores and confidences, so a column of numbers does not
+   reflow as the digits change. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes vv-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Entrance for a claim card as it lands. transform and opacity only: animating
+   height here would reflow the list on every arriving claim. */
+.vv-rise {
+  animation: vv-rise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes vv-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+.vv-sweep {
+  animation: vv-sweep 1.4s ease-in-out infinite;
 }
