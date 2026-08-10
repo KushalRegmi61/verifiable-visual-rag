@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 
 BBox = tuple[float, float, float, float]
 
+# The reader drafts claims[0] as the sentence that answers the question, and
+# everything after it as support. Both `Answer.lead_withheld` and the wire's
+# per-claim `abstains_answer` flag depend on that position, so it is named once
+# here rather than written as a bare 0 in each of them.
+LEAD_INDEX = 0
+
 
 class GroundedRegion(BaseModel):
     """A region of a page put forward as evidence for a claim."""
@@ -143,9 +149,24 @@ class Answer(BaseModel):
         `not self.shown` is checked first and short-circuits to True whenever
         `claims` is empty, so `self.claims[0]` is only ever reached once a lead
         exists. Writing the lead condition first reads more naturally but
-        raises `IndexError` on an empty answer.
+        raises `IndexError` on an empty answer. `lead_withheld` guards its own
+        index with `bool(self.claims)`, so it is safe on its own, but the order
+        here is kept because the cheap condition still belongs first.
         """
-        return not self.shown or self.claims[0].withheld
+        return not self.shown or self.lead_withheld
+
+    @property
+    def lead_withheld(self) -> bool:
+        """The claim that answers the question did not survive.
+
+        See abstained_overall, which is the rule this half belongs to. It is
+        named separately because the streaming API needs to report the same
+        fact per claim, as the claims arrive, and long before an Answer exists
+        to ask. Without one spelling, the browser would have to re-derive "the
+        lead is index 0 and it was withheld" in TypeScript, and this branch has
+        already been burned twice by a guarantee written down in two places.
+        """
+        return bool(self.claims) and self.claims[LEAD_INDEX].withheld
 
     @property
     def shown(self) -> list["Claim"]:

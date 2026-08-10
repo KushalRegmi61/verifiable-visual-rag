@@ -16,7 +16,7 @@ from visual_verify.agent.events import (
     ClaimVerified,
     ReadingStarted,
 )
-from visual_verify.contracts import Claim, GroundedRegion
+from visual_verify.contracts import LEAD_INDEX, Claim, GroundedRegion
 
 
 def _region(r: GroundedRegion) -> dict:
@@ -53,6 +53,21 @@ def _claim(index: int, c: Claim) -> dict:
         # sentence. This line is where someone would be tempted to tidy it into
         # the `withheld` branch, and a test named for that failure guards it.
         "starts_paragraph": c.starts_paragraph,
+        # Tells the browser the answer is ALREADY abstaining, before `done`
+        # arrives. _answer_events yields one ClaimVerified per claim and only
+        # then AnswerComplete, so a UI that waits for `done` to learn the lead
+        # was withheld spends one verifier call per remaining claim, tens of
+        # seconds on a serial GPU, presenting supporting detail under an
+        # "Answer" heading and then retracting it. What gets retracted is the
+        # assertion that these sentences answer the question, which is the one
+        # thing the lead rule exists to prevent.
+        #
+        # Both halves are single-sourced: LEAD_INDEX is the same constant
+        # Answer.lead_withheld indexes with, and `withheld` is the local already
+        # bound from Claim.withheld above. This flag strictly implies
+        # abstained_overall, so a client acting on it early can never announce a
+        # refusal the eventual `done` frame contradicts.
+        "abstains_answer": index == LEAD_INDEX and withheld,
     }
 
 

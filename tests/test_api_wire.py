@@ -221,3 +221,31 @@ def test_a_withheld_claim_still_carries_its_paragraph_break():
 
     assert payload["regions"] == []
     assert payload["starts_paragraph"] is True
+
+
+def test_a_withheld_lead_announces_the_abstention_on_its_own_claim_frame():
+    """The browser must learn the answer is abstaining from the first claim,
+    not from `done`. _answer_events emits every ClaimVerified before
+    AnswerComplete, so a UI that waits for `done` renders the surviving support
+    under an "Answer" heading for one verifier call per remaining claim and
+    then retracts it, which is exactly the framing the lead rule forbids."""
+    _, payload = to_frame(ClaimVerified(index=0, claim=withheld_claim()))
+
+    assert payload["abstains_answer"] is True
+
+
+def test_a_withheld_claim_after_the_lead_does_not_announce_an_abstention():
+    """Support failing verification is not a refusal. If this were true for any
+    withheld claim, an answer whose lead survived would still decline, and the
+    system would refuse to answer questions it had answered."""
+    _, payload = to_frame(ClaimVerified(index=2, claim=withheld_claim()))
+
+    assert payload["abstains_answer"] is False
+
+
+def test_a_surviving_lead_does_not_announce_an_abstention():
+    """The other half of the conjunction. Position alone must not abstain, or
+    every answer would decline on its own first claim."""
+    _, payload = to_frame(ClaimVerified(index=0, claim=shown_claim()))
+
+    assert payload["abstains_answer"] is False
