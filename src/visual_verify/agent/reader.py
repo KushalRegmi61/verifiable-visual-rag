@@ -370,7 +370,7 @@ def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedC
     whether the response came from the cache before concluding the provider
     behaved.
     """
-    out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
+    out = chat.structured(PROMPT.format(question=question), [image_path], ClaimList)
     if out.from_bare_strings:
         warnings.warn(
             f"{chat.model_id} returned claims as bare strings instead of objects, so it "

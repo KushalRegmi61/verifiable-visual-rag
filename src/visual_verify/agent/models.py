@@ -127,9 +127,13 @@ class LangChainChat:
     def model_id(self) -> str:
         return self._model_id
 
-    def structured(self, prompt: str, image_path: Path | None, schema: type[S]) -> S:
+    def structured(self, prompt: str, image_paths: list[Path], schema: type[S]) -> S:
         content: list[dict] = [{"type": "text", "text": prompt}]
-        if image_path is not None:
+        # One block per page, in the order given. The prompt numbers the pages
+        # in that same order, so a reordering here would leave the model
+        # describing page 8 while the text calls it page 7, and nothing about
+        # the response would look wrong.
+        for image_path in image_paths:
             encoded = base64.b64encode(Path(image_path).read_bytes()).decode()
             content.append(
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}

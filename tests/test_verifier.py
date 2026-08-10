@@ -64,4 +64,4 @@ def test_the_page_image_reaches_the_verifier():
     chat = FakeChat("m", [Verdict(label="supported", confidence=0.5, reason="r")])
     verify(chat, Path("page7.png"), "c", [region()])
 
-    assert chat.calls[0].image_path == Path("page7.png")
+    assert chat.calls[0].image_paths == [Path("page7.png")]

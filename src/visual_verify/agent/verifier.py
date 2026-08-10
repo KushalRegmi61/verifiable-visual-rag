@@ -63,4 +63,4 @@ def verify(
     would discard the signal the project exists to measure.
     """
     prompt = PROMPT.format(claim=claim, evidence=_render(regions))
-    return chat.structured(prompt, image_path, Verdict)
+    return chat.structured(prompt, [image_path], Verdict)

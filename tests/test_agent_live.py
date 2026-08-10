@@ -89,7 +89,7 @@ def test_reader_output_parses_as_the_claim_schema():
     from visual_verify.agent.models import make_chat
 
     chat = make_chat("reader", Settings.from_env())
-    out = chat.structured("List two facts about this page.", _a_page(), ClaimList)
+    out = chat.structured("List two facts about this page.", [_a_page()], ClaimList)
 
     assert isinstance(out, ClaimList)
 

@@ -23,15 +23,24 @@ class StructuredChat(Protocol):
         """Provider-qualified, e.g. 'openai:gpt-4o'. The cache keys on this."""
         ...
 
-    def structured(self, prompt: str, image_path: Path | None, schema: type[S]) -> S:
-        """One turn. Raises if the response does not satisfy `schema`."""
+    def structured(self, prompt: str, image_paths: list[Path], schema: type[S]) -> S:
+        """One turn over zero or more page images. Raises if the response does
+        not satisfy `schema`.
+
+        A list, not `Path | None` and not an overload: the reader now sees the
+        top pages of a document in one call. There is deliberately no
+        single-image spelling left, because a compatibility shim would leave a
+        quiet path that still type-checks while carrying one page, and the
+        symptom of a dropped page is a plausible answer that simply misses the
+        evidence rather than anything that raises.
+        """
         ...
 
 
 @dataclass(frozen=True)
 class RecordedCall:
     prompt: str
-    image_path: Path | None
+    image_paths: list[Path]
 
 
 @dataclass
@@ -52,8 +61,12 @@ class FakeChat:
     def model_id(self) -> str:
         return self._model_id
 
-    def structured(self, prompt: str, image_path: Path | None, schema: type[S]) -> S:
-        self.calls.append(RecordedCall(prompt=prompt, image_path=image_path))
+    def structured(self, prompt: str, image_paths: list[Path], schema: type[S]) -> S:
+        # Copied, not aliased: a caller that builds the list once and mutates it
+        # between calls would otherwise rewrite the record of what it already
+        # sent, and the test asserting which pages reached the model would read
+        # back the latest call's pages for every call.
+        self.calls.append(RecordedCall(prompt=prompt, image_paths=list(image_paths)))
         assert self._next < len(self.responses), (
             f"script exhausted after {self._next} call(s); the code under test "
             "called the model more times than the test scripted"

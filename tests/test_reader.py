@@ -23,7 +23,7 @@ def test_read_sends_the_question_and_the_page_image():
 
     call = chat.calls[0]
     assert "What is the threshold?" in call.prompt
-    assert call.image_path == Path("page.png")
+    assert call.image_paths == [Path("page.png")]
 
 
 def test_read_returns_an_empty_list_when_the_page_answers_nothing():
