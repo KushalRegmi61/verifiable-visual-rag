@@ -75,6 +75,35 @@ def is_compound(claim: str) -> bool:
     return bool(_VERB.search(before) and _VERB.search(after))
 
 
+# Sentence-initial only. A pronoun in the MIDDLE of a sentence resolves within
+# that sentence and is fine; it is the opening that a reader resolves against
+# whatever came before, and whatever came before may have been withheld.
+_ANAPHORA = re.compile(
+    r"^\s*(?:it|its|they|them|their|this|these|those|such|"
+    r"additionally|also|furthermore|moreover|however)\b",
+    re.IGNORECASE,
+)
+
+
+def opens_with_anaphora(claim: str) -> bool:
+    """Whether this claim depends on the sentence before it to make sense.
+
+    Verification runs after drafting, so any claim may be removed before the
+    answer is shown. A claim opening with "It" or "Each of them" is meaningless
+    once its predecessor is withheld, and it does not announce that it is
+    broken: it stays grammatical and quietly says something other than what was
+    verified.
+
+    Flagged, never rejected. The same rule `is_compound` follows: dropping the
+    claim would lose verified content with a real region behind it, and the
+    useful response is to surface the rate in the eval and fix the prompt.
+
+    `\\b` matters. A prefix match would flag "Itemised costs appear in Table 2",
+    where "It" is the first two letters of a word and nothing is dangling.
+    """
+    return bool(_ANAPHORA.match(claim))
+
+
 def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
     """The drafted answer for `question`, one sentence per claim."""
     out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
