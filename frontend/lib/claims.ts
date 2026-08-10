@@ -59,10 +59,21 @@ export function toneFor(label: ClaimLabel | null): Tone {
  * Split the shown claims into paragraphs at the breaks the reader marked.
  *
  * The break lives on the claim rather than being inferred from the text,
- * because only the reader knows where the topic turns. Verification removes
- * claims after drafting, so the claim carrying a break is frequently the one
- * withheld; the first survivor always opens a paragraph regardless of its own
- * flag, which is what stops the answer from opening with an empty block.
+ * because only the reader knows where the topic turns.
+ *
+ * The first survivor always opens a paragraph regardless of its own flag.
+ * That is not about avoiding an empty block: it is what stops the loop from
+ * crashing. Verification removes claims after drafting, so the common case is
+ * that NO survivor carries the flag at all; without the `groups.length === 0`
+ * clause, the first claim would fall to the `else` branch and try to append
+ * to `groups[-1]`, which is `undefined`, and `.push` on it throws inside
+ * render.
+ *
+ * This cannot recover a break whose claim was withheld. When the claim
+ * carrying the flag is gone, the break is genuinely lost, because it was the
+ * only thing that knew where the topic turned, and the survivors merge into
+ * one paragraph. That is the correct degradation, not a bug this function is
+ * meant to fix.
  */
 export function groupIntoParagraphs(claims: ClaimEvent[]): ClaimEvent[][] {
   const groups: ClaimEvent[][] = [];
