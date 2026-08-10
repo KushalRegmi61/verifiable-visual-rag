@@ -28,18 +28,22 @@ so the sentences must obey four rules.
 
 1. The FIRST sentence answers the question directly. Not background, not what
    the page is about. Someone who read only that sentence should have the
-   answer.
+   direct answer, not every detail of it. The detail goes in the sentences
+   after it, one thing per sentence.
 
 2. Each sentence asserts exactly ONE thing. Each sentence is matched to a
    single region of the page as its evidence, and a sentence asserting two
    things cannot be evidenced by one region.
 
 3. Each sentence stands on its own. Never refer back to the previous sentence
-   or to anything above: no sentence may begin with it, they, them, such, or
-   Additionally, and no sentence may use a pronoun whose meaning is only in an
-   earlier sentence. Repeat the noun instead. Pointing at what you are looking
-   at is fine, because it does not depend on any other sentence: "This page",
-   "This figure", "This table" all stand on their own.
+   or to anything above. No sentence may begin with it, its, they, them,
+   their, such, that, these, or those, and no sentence may begin with a
+   connective such as Additionally, Also, However, Therefore, Instead,
+   Furthermore, Moreover, Hence, or Consequently. No sentence may use a
+   pronoun whose meaning is only in an earlier sentence. Repeat the noun
+   instead. Pointing at what you are looking at is fine, because it does not
+   depend on any other sentence: "This page", "This figure", "This table" all
+   stand on their own.
 
 4. Connect each sentence to the one before it by repeating a noun phrase from
    the end of that sentence, never by a pronoun. "The evaluation compares three
@@ -48,7 +52,8 @@ so the sentences must obey four rules.
    becomes nonsense the moment the first sentence is removed.
 
 Write the way you would answer a colleague who asked you out loud. Do not
-describe the page. State what it says.
+describe the page. State what it says. A complete answer is usually three to
+six sentences, and a sentence is usually shorter than twenty words.
 
 Set starts_paragraph on a sentence that opens a new topic, and leave it false
 otherwise. Most answers are a single paragraph.
@@ -97,6 +102,19 @@ def is_compound(claim: str) -> bool:
     the conjunctions and the semicolon above. Expect it to catch the common
     joined-clause shapes and to stay quiet on compound subjects; do not read
     "not flagged" as "verified atomic."
+
+    One whole CLASS is invisible to it, and no growth of `_VERB` will change
+    that: a single clause that piles up several assertions without coordinating
+    any clauses. Measured, from the first output of the drafting prompt: "The
+    evaluation methodology evaluates both the baseline document RAG system and
+    the proposed system using answer accuracy, grounding overlap, and abstention
+    quality so that the contribution of the added layer can be measured directly
+    through an ablation." Thirty-seven words asserting three things, and
+    `is_compound` returns False, correctly by its own definition. The "and"s
+    join a compound OBJECT and a list, "using ..." is a participial adjunct, and
+    "so that ..." is a purpose clause. None of the three is a coordinated
+    clause, so there is no second independent verb for the check to find. A
+    length cap is the only cheap signal that sees this shape.
     """
     match = _JOINER.search(claim)
     if not match:
@@ -282,12 +300,25 @@ def shares_content_word(previous: str, claim: str) -> bool:
 def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
     """The drafted answer for `question`, one sentence per claim.
 
-    Warns, once, when the provider returned bare strings instead of objects.
-    The prompt asks for `starts_paragraph`, so bare strings mean the schema was
+    Warns when the provider returned bare strings instead of objects. The
+    prompt asks for `starts_paragraph`, so bare strings mean the schema was
     ignored: `ClaimList` coerces them and every claim silently takes False, the
     answer renders as one paragraph forever, and nothing raises or fails. A
     warning rather than an exception, because a single-paragraph answer is
     still an answer and refusing to return it would be the worse failure.
+
+    "Warns" means once per call here, and once per source location under
+    Python's default filter, so a second question from the same caller in the
+    same process is silent. It does NOT survive `CachedChat`. The cache stores
+    `model_dump_json`, which writes claims as objects, and the replay path
+    revalidates that, so the coercion never fires again and the flag is a
+    PrivateAttr the cache does not carry. The first live run against a
+    schema-ignoring provider warns and every replay is quiet, including the
+    offline defense demo. Persisting it would mean changing the cache entry
+    format, which is also the reproducibility record, so it is recorded here
+    instead: if the answer is one paragraph and no warning appeared, check
+    whether the response came from the cache before concluding the provider
+    behaved.
     """
     out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
     if out.from_bare_strings:

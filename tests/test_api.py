@@ -11,7 +11,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from visual_verify.agent.schemas import ClaimList, Verdict
+from helpers import claim_list
+from visual_verify.agent.schemas import Verdict
 from visual_verify.agent.types import FakeChat
 from visual_verify.api.app import build_app
 from visual_verify.api.resources import Resources
@@ -38,7 +39,7 @@ def client(tmp_path, monkeypatch, born_digital_pdf):
         engine=make_engine(settings.db_url),
         index=_make_index(settings),
         embedder=FakeEmbedder(),
-        reader_chat=FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])]),
+        reader_chat=FakeChat("r", [claim_list("Revenue grew 42 percent")]),
         verifier_chat=FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")]),
     )
     app = build_app(resources)

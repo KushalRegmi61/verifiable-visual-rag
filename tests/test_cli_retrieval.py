@@ -3,6 +3,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from helpers import claim_list
 from visual_verify.cli import main
 from visual_verify.config import Settings
 from visual_verify.store.engine import make_engine
@@ -297,7 +298,7 @@ def test_ask_command_runs_end_to_end_with_cached_fake_models(
     cache key and nothing was exercising it end to end.
     """
     import visual_verify.agent.models as models_module
-    from visual_verify.agent.schemas import ClaimList, Verdict
+    from visual_verify.agent.schemas import Verdict
     from visual_verify.agent.types import FakeChat
 
     assert main(["ingest", str(born_digital_pdf)]) == 0
@@ -307,7 +308,7 @@ def test_ask_command_runs_end_to_end_with_cached_fake_models(
 
     def fake_make_chat(role, settings):
         if role == "reader":
-            return FakeChat("openai:fake-reader", [ClaimList(claims=["Revenue grew 42 percent"])])
+            return FakeChat("openai:fake-reader", [claim_list("Revenue grew 42 percent")])
         return FakeChat(
             "google:fake-verifier",
             [Verdict(label="supported", confidence=0.9, reason="matches the page")],
@@ -340,7 +341,7 @@ def test_ask_warns_before_the_reader_runs_when_the_page_is_not_embedded(
     import fitz
 
     import visual_verify.agent.models as models_module
-    from visual_verify.agent.schemas import ClaimList, Verdict
+    from visual_verify.agent.schemas import Verdict
     from visual_verify.agent.types import FakeChat
 
     assert main(["ingest", str(born_digital_pdf)]) == 0
@@ -358,7 +359,7 @@ def test_ask_warns_before_the_reader_runs_when_the_page_is_not_embedded(
 
     def fake_make_chat(role, settings):
         if role == "reader":
-            return FakeChat("openai:fake-reader", [ClaimList(claims=["Revenue grew 42 percent"])])
+            return FakeChat("openai:fake-reader", [claim_list("Revenue grew 42 percent")])
         return FakeChat(
             "google:fake-verifier",
             [Verdict(label="supported", confidence=0.9, reason="matches the page")],

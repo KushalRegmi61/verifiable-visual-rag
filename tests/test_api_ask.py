@@ -4,8 +4,9 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from helpers import claim_list
 from visual_verify.agent.events import AnswerComplete, ClaimVerified
-from visual_verify.agent.schemas import ClaimList, Verdict
+from visual_verify.agent.schemas import Verdict
 from visual_verify.agent.types import FakeChat
 from visual_verify.api.ask import AskRequest, NoPagesIndexed, Retrieved, ask_events
 from visual_verify.cli import _make_index, main
@@ -26,7 +27,7 @@ def indexed(tmp_path, monkeypatch, born_digital_pdf):
 
 
 def chats():
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
     return reader, verifier
 

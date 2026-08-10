@@ -5,19 +5,20 @@ from pathlib import Path
 
 import pytest
 
+from helpers import claim_list
 from visual_verify.agent.reader import is_compound, opens_with_anaphora, read, shares_content_word
 from visual_verify.agent.schemas import ClaimList
 from visual_verify.agent.types import FakeChat
 
 
 def test_read_returns_the_models_claims():
-    chat = FakeChat("m", [ClaimList(claims=["Revenue grew.", "Margins held."])])
+    chat = FakeChat("m", [claim_list("Revenue grew.", "Margins held.")])
     claims = read(chat, Path("page.png"), "What happened?")
     assert [c.text for c in claims] == ["Revenue grew.", "Margins held."]
 
 
 def test_read_sends_the_question_and_the_page_image():
-    chat = FakeChat("m", [ClaimList(claims=["a"])])
+    chat = FakeChat("m", [claim_list("a")])
     read(chat, Path("page.png"), "What is the threshold?")
 
     call = chat.calls[0]

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import claim_list
 from visual_verify.agent import AgentError, answer, answer_stream
 from visual_verify.agent.events import AnswerComplete, ClaimsProduced, ClaimVerified, ReadingStarted
 from visual_verify.agent.schemas import ClaimList, Verdict
@@ -62,7 +63,7 @@ def page_boxes():
 
 
 def script():
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent", "Margins held steady"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent", "Margins held steady")])
     verifier = FakeChat(
         "v",
         [
@@ -144,7 +145,7 @@ def test_the_same_model_guard_raises_before_anything_is_iterated():
     would raise after the 200 and its headers were committed and reach the
     browser as an SSE error frame instead of a refusal to start.
     """
-    same = FakeChat("same", [ClaimList(claims=["x"])])
+    same = FakeChat("same", [claim_list("x")])
     other = FakeChat("same", [Verdict(label="supported", confidence=0.5, reason="r")])
 
     with pytest.raises(AgentError):

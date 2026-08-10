@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from helpers import claim_list
 from visual_verify.agent import AgentError, answer
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.agent.types import FakeChat
@@ -52,7 +53,7 @@ def page_boxes():
 
 
 def test_a_supported_claim_is_shown_with_its_regions():
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
 
     out = answer(
@@ -75,7 +76,7 @@ def test_a_supported_claim_is_shown_with_its_regions():
 def test_an_unsupported_claim_is_abstained_on():
     """The point of the project: a wrong answer with a confident box drawn on
     it is worse than no answer."""
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="unsupported", confidence=0.9, reason="no")])
 
     out = answer(
@@ -88,7 +89,7 @@ def test_an_unsupported_claim_is_abstained_on():
 
 def test_a_partially_supported_claim_is_abstained_on_at_the_default_threshold():
     """Even at confidence 1.0. The label decides, not the number."""
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="partially_supported", confidence=1.0, reason="half")])
 
     out = answer(
@@ -101,7 +102,7 @@ def test_a_partially_supported_claim_is_abstained_on_at_the_default_threshold():
 def test_lowering_the_threshold_admits_a_partially_supported_claim():
     """The threshold is a parameter because S7 sweeps it to build the
     confident-wrong against coverage curve."""
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="partially_supported", confidence=0.5, reason="half")])
 
     out = answer(
@@ -118,7 +119,7 @@ def test_lowering_the_threshold_admits_a_partially_supported_claim():
 
 
 def test_every_claim_reaching_the_verifier_gets_one_call():
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent", "Margins held steady"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent", "Margins held steady")])
     verifier = FakeChat(
         "v",
         [
@@ -146,7 +147,7 @@ def test_a_reader_returning_nothing_abstains_overall():
 
 
 def test_all_claims_abstained_means_abstained_overall():
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat("v", [Verdict(label="unsupported", confidence=0.9, reason="no")])
 
     out = answer(
@@ -164,7 +165,7 @@ def test_a_compound_claim_is_flagged_but_still_shown_and_verified():
         word(0.1 + i * 0.15, 0.10, 0.22 + i * 0.15, 0.16, t, i)
         for i, t in enumerate(["Revenue", "grew", "and", "margins", "fell"])
     ]
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew and margins fell"])])
+    reader = FakeChat("r", [claim_list("Revenue grew and margins fell")])
     verifier = FakeChat("v", [Verdict(label="supported", confidence=0.9, reason="matches")])
 
     out = answer(
@@ -187,7 +188,7 @@ def test_the_same_model_for_both_roles_is_refused():
     """The separate-judge requirement is the reason this slice exists. A
     misconfiguration pointing both roles at one model would otherwise be
     invisible and would silently invalidate every verification."""
-    same = FakeChat("openai:gpt-4o", [ClaimList(claims=["a"])])
+    same = FakeChat("openai:gpt-4o", [claim_list("a")])
     other = FakeChat("openai:gpt-4o", [Verdict(label="supported", confidence=0.9, reason="r")])
 
     with pytest.raises(AgentError, match="same model"):
@@ -204,7 +205,7 @@ def test_a_claim_that_cannot_be_grounded_does_not_abort_the_whole_answer():
     """
     reader = FakeChat(
         "r",
-        [ClaimList(claims=["Revenue grew 42 percent", "The paraphrase is nowhere on this page"])],
+        [claim_list("Revenue grew 42 percent", "The paraphrase is nowhere on this page")],
     )
     verifier = FakeChat(
         "v",
@@ -229,7 +230,7 @@ def test_answer_carries_the_verifier_reason_onto_the_claim():
     """The reason is the only thing that makes a wrong verdict debuggable, and
     the UI's withheld panel is built around it. Dropping it here made it
     unreachable outside the verifier."""
-    reader = FakeChat("r", [ClaimList(claims=["Revenue grew 42 percent"])])
+    reader = FakeChat("r", [claim_list("Revenue grew 42 percent")])
     verifier = FakeChat(
         "v", [Verdict(label="unsupported", confidence=0.8, reason="the chart shows a fall")]
     )

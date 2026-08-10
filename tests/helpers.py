@@ -37,3 +37,20 @@ def skip_if_no_quota(exc: Exception) -> None:
     if unreachable:
         pytest.skip(f"provider reachable but unprovisioned: {text[:160]}")
     raise exc
+
+
+def claim_list(*texts: str):
+    """A ClaimList built the way a schema-honouring provider builds one.
+
+    `ClaimList(claims=["a"])` coerces bare strings, and `read()` warns when
+    that coercion fired, because from a real provider it means the model
+    ignored the output schema and starts_paragraph is silently False on every
+    claim. A FakeChat is not a provider: it replays a ClaimList the test
+    constructed, so the warning there is mis-scoped noise about the test
+    fixture rather than a signal about anything under test. Use this at any
+    site whose ClaimList actually reaches `read()`; the string form stays
+    valid everywhere else.
+    """
+    from visual_verify.agent.schemas import ClaimList
+
+    return ClaimList(claims=[{"text": t} for t in texts])

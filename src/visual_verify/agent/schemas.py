@@ -72,8 +72,8 @@ class ClaimList(BaseModel):
 
         It has to run here rather than inside `_accept_bare_strings`: a field
         validator returns a value and cannot touch the instance, which does not
-        exist yet, and warning from inside it would fire for each of the forty
-        test sites that legitimately pass strings rather than once per read().
+        exist yet, and warning from inside it would fire for every test site
+        that legitimately passes strings rather than once per read().
         """
         raw = data.get("claims") if isinstance(data, dict) else None
         bare = isinstance(raw, list) and any(isinstance(c, str) for c in raw)
@@ -87,9 +87,9 @@ class ClaimList(BaseModel):
     def _accept_bare_strings(cls, v: object) -> object:
         """A plain string becomes a claim that starts no paragraph.
 
-        It exists for size: around forty construction sites across the test
-        suite pass strings, and rewriting all of them to dictionaries would be
-        a large diff that tests nothing.
+        It exists for size: every test site that legitimately passes strings
+        would otherwise have to be rewritten to dictionaries, which is a large
+        diff that tests nothing.
 
         It is not a reassurance about live providers. When this branch fires
         against a real model, the reader ignored the schema and returned bare
