@@ -100,6 +100,11 @@ class Answer(BaseModel):
     # EVERY claim, including the ones that failed verification. The evaluation
     # harness needs both to compute confident-wrong against coverage, so an
     # abstained claim is marked rather than removed.
+    # The list is in the reader's drafted order: claims[0] is the lead, the
+    # sentence that answers the question, and everything after it is support.
+    # abstained_overall depends on that ordering; nothing enforces it, so a
+    # future refactor that sorts or groups this list would silently repoint
+    # the lead at a different sentence.
     claims: list[Claim] = Field(default_factory=list)
 
     @computed_field
@@ -133,6 +138,12 @@ class Answer(BaseModel):
 
         `claims` holds every claim in drafted order including withheld ones, so
         the lead is still identifiable after the gate has removed it.
+
+        The order of the two conditions is load-bearing, not stylistic.
+        `not self.shown` is checked first and short-circuits to True whenever
+        `claims` is empty, so `self.claims[0]` is only ever reached once a lead
+        exists. Writing the lead condition first reads more naturally but
+        raises `IndexError` on an empty answer.
         """
         return not self.shown or self.claims[0].withheld
 

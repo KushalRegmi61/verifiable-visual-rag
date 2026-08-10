@@ -503,7 +503,7 @@ def _print_ask_result(result: Answer, threshold: float) -> None:
             _print_claim(c, indent="  ")
 
     if result.abstained_overall:
-        print("\nabstained: the claim answering the question was not verified")
+        print("\nabstained: the question was not answered with verified evidence")
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
