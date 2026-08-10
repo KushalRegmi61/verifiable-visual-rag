@@ -86,6 +86,20 @@ def test_two_different_page_sets_do_not_share_a_cache_entry(tmp_path):
     assert chat.structured("p", [a], ClaimList).claims[0].text == "from one"
 
 
+def test_a_text_only_call_and_a_one_image_call_do_not_share_a_cache_entry(tmp_path):
+    """`image_paths` used to be `Path | None`, and `[]` now stands in for the
+    text-only `None` case. That is exactly the boundary the change moved: a
+    call with no pages attached and a call with one page, same prompt, must
+    not collide just because an empty list could hash away to nothing."""
+    a = tmp_path / "a.png"
+    a.write_bytes(b"a")
+    inner = FakeChat("m", [claim_list("text only"), claim_list("with page")])
+    chat = CachedChat(inner, tmp_path / "cache")
+
+    assert chat.structured("p", [], ClaimList).claims[0].text == "text only"
+    assert chat.structured("p", [a], ClaimList).claims[0].text == "with page"
+
+
 def test_image_order_changes_the_cache_key(tmp_path):
     """[a, b] and [b, a] are different prompts to a vision model: the pages are
     numbered in the text and the model reads them in order."""

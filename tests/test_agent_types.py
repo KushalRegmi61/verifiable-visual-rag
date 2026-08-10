@@ -1,5 +1,7 @@
 """The seam that keeps LangChain out of every module except models.py."""
 
+from pathlib import Path
+
 import pytest
 
 from visual_verify.agent.schemas import ClaimList, Verdict
@@ -48,6 +50,23 @@ def test_fake_chat_records_every_image_it_was_given(tmp_path):
     chat.structured("p", [tmp_path / "one.png", tmp_path / "two.png"], ClaimList)
 
     assert chat.calls[0].image_paths == [tmp_path / "one.png", tmp_path / "two.png"]
+
+
+def test_fake_chat_copies_image_paths_so_a_later_mutation_cannot_rewrite_the_record():
+    """The next task builds one `pages` list and hands it to the reader, then
+    the verifier. If `structured` stored the reference instead of a copy,
+    mutating the caller's list after the call would silently rewrite what the
+    recorded call shows, even though the model was actually sent the old
+    contents."""
+    chat = FakeChat("m", [ClaimList(claims=["a"]), ClaimList(claims=["b"])])
+    pages = [Path("one.png"), Path("two.png")]
+
+    chat.structured("p", pages, ClaimList)
+    pages.append(Path("three.png"))
+    chat.structured("p", pages, ClaimList)
+
+    assert chat.calls[0].image_paths == [Path("one.png"), Path("two.png")]
+    assert chat.calls[1].image_paths == [Path("one.png"), Path("two.png"), Path("three.png")]
 
 
 def test_fake_chat_reports_a_model_id():
