@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from visual_verify.agent.reader import is_compound, opens_with_anaphora, read
+from visual_verify.agent.reader import is_compound, opens_with_anaphora, read, shares_content_word
 from visual_verify.agent.schemas import ClaimList
 from visual_verify.agent.types import FakeChat
 
@@ -163,3 +163,57 @@ def test_bare_quantifier_openers_are_a_known_miss():
     design; see the docstring."""
     assert opens_with_anaphora("Both are scored on three metrics.") is False
     assert opens_with_anaphora("Each of them is scored.") is False
+
+
+def test_a_chained_pair_shares_a_content_word():
+    assert shares_content_word(
+        "The evaluation compares three system variants on SlideVQA.",
+        "Each of the three variants is scored on answer accuracy.",
+    ) is True
+
+
+def test_two_unrelated_claims_share_nothing():
+    """The second claim is deliberately given its own leading "The", so the two
+    sentences share a stopword ("the") and nothing else. A version without a
+    shared stopword passes even with `_STOPWORDS` emptied out, by coincidence
+    rather than by exercising the guarantee this test exists to pin; this
+    phrasing fails under that mutation, as it must."""
+    assert shares_content_word(
+        "The evaluation compares three system variants on SlideVQA.",
+        "The ground truth is derived automatically.",
+    ) is False
+
+
+def test_a_stopword_overlap_does_not_count_as_chaining():
+    """THE test of this function. Every pair of English sentences shares "the"
+    or "is". Without a stopword list the check returns True for everything,
+    which is worse than not having it: it would report perfect chaining on a
+    reader that had reverted to listing disconnected facts.
+    """
+    assert shares_content_word("The page is here.", "The chart is there.") is False
+
+
+def test_a_plural_matches_its_singular():
+    """Claims chain through a noun phrase that often changes number across the
+    join: "three variants" then "each variant"."""
+    assert shares_content_word(
+        "The evaluation compares three variants.",
+        "Each variant is scored separately.",
+    ) is True
+
+
+def test_punctuation_does_not_block_a_match():
+    assert shares_content_word("Scores come from SlideVQA.", "SlideVQA has 2000 slides.") is True
+
+
+def test_a_doubled_trailing_s_is_not_over_stripped():
+    """str.rstrip("s") removes every trailing s, not one. "caress" ends in a
+    doubled s ("...ess"), and stripping both collapses it to "care", which
+    collides with the unrelated word "cares" (itself stripped to "care") even
+    though a caress and caring about something share no meaning. Stripping at
+    most a single trailing character keeps "caress" as "cares", distinct from
+    "care"/"cares", and the false match disappears."""
+    assert shares_content_word(
+        "She cares about the outcome.",
+        "He gave a gentle caress.",
+    ) is False

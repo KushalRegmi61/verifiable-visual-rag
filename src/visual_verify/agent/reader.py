@@ -156,6 +156,56 @@ def opens_with_anaphora(claim: str) -> bool:
     return bool(_ANAPHORA.match(claim))
 
 
+# Closed class only. A long stopword list would start removing the words that
+# actually carry the chain; these are the ones that appear in essentially every
+# sentence and therefore signal nothing about whether two claims are connected.
+_STOPWORDS = frozenset(
+    """a an and are as at be been by for from has have in is it its of on or
+    that the their there these this those to was were which with""".split()
+)
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _content_words(text: str) -> set[str]:
+    """Lowercased words with stopwords dropped and a trailing s stripped.
+
+    Strips at most ONE trailing s, not `str.rstrip("s")`'s "all of them":
+    rstrip removes the whole trailing run, so a word ending in a doubled s
+    ("caress") loses both and collapses to "care", the same stem an unrelated
+    word ("cares") also reduces to. That is a false match between two words
+    that share no meaning, not a rounding error, so a single conditional
+    slice is used instead. It is still a heuristic, not a stemmer: "class" and
+    "process" become "clas" and "proces", which do not equal any inflected
+    form of themselves either way, and a genuine "-es" plural ("processes")
+    is not reunited with its singular. Good enough for the common case this
+    exists to catch (a bare final s marking a plural), and honest that it is
+    not morphology.
+    """
+    words = _WORD.findall(text.lower())
+    return {(w[:-1] if w.endswith("s") and len(w) > 1 else w) for w in words if w not in _STOPWORDS}
+
+
+def shares_content_word(previous: str, claim: str) -> bool:
+    """Whether `claim` picks up anything from `previous`.
+
+    A proxy for the chaining rule the reader prompt asks for: connect each
+    sentence to the one before it by repeating a noun phrase from its end. That
+    is what gives the answer human flow while surviving the removal of any
+    sentence, since repeating the noun works where a pronoun would dangle.
+
+    Deliberately crude, and honest about it. A reader can satisfy this while
+    writing badly, so it is a floor rather than a measure of quality. What it
+    does catch is the failure this project actually saw: a reader reverting to
+    a list of disconnected facts, where adjacent claims share no content word
+    at all.
+
+    The stopword list is what makes it mean anything. Every pair of English
+    sentences shares "the" or "is", so without it the answer is always True.
+    """
+    return bool(_content_words(previous) & _content_words(claim))
+
+
 def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
     """The drafted answer for `question`, one sentence per claim."""
     out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
