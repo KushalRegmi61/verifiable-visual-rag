@@ -46,9 +46,12 @@ def _claim(index: int, c: Claim) -> dict:
         "compound": c.compound,
         "withheld": withheld,
         "regions": [] if withheld else [_region(r) for r in c.regions],
-        # Where the answer breaks into a new paragraph. Metadata, not text: it
-        # adds nothing unverified to the screen and every claim still maps to
-        # exactly one region.
+        # Deliberately OUTSIDE the strip above, and sent for a withheld claim
+        # too. The strip exists for geometry; a paragraph break is not geometry.
+        # The frontend lays out every claim it receives, so a withheld claim
+        # that reported the wrong break would move the paragraph onto the wrong
+        # sentence. This line is where someone would be tempted to tidy it into
+        # the `withheld` branch, and a test named for that failure guards it.
         "starts_paragraph": c.starts_paragraph,
     }
 
