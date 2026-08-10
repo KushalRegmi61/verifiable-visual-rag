@@ -203,7 +203,12 @@ def test_a_withheld_lead_abstains_even_when_detail_survived():
     the fact dump this design exists to remove. A reviewer is likely to read
     this as a bug, which is why it is stated as a test.
     """
-    lead = Claim(text="The evaluation runs on SlideVQA.", confidence=0.4, label="unsupported", abstained=True)
+    lead = Claim(
+        text="The evaluation runs on SlideVQA.",
+        confidence=0.4,
+        label="unsupported",
+        abstained=True,
+    )
     detail = Claim(text="Ground truth is derived automatically.", confidence=0.9, label="supported")
     answer = Answer(question="q", claims=[lead, detail])
 
@@ -213,7 +218,12 @@ def test_a_withheld_lead_abstains_even_when_detail_survived():
 
 def test_a_surviving_lead_does_not_abstain():
     lead = Claim(text="The evaluation runs on SlideVQA.", confidence=0.9, label="supported")
-    detail = Claim(text="Ground truth is derived automatically.", confidence=0.4, label="unsupported", abstained=True)
+    detail = Claim(
+        text="Ground truth is derived automatically.",
+        confidence=0.4,
+        label="unsupported",
+        abstained=True,
+    )
     answer = Answer(question="q", claims=[lead, detail])
 
     assert [c.text for c in answer.shown] == ["The evaluation runs on SlideVQA."]
