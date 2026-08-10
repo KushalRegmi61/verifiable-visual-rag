@@ -30,12 +30,17 @@ from pathlib import Path
 import fitz
 import pytest
 
-from conftest import PAGE_H, PAGE_W, _skip_if_no_quota
+from conftest import PAGE_H, PAGE_W
+from helpers import skip_if_no_quota
 from visual_verify.agent.schemas import Verdict
 from visual_verify.config import Settings
 from visual_verify.contracts import GroundedRegion
 
-pytestmark = pytest.mark.skipif(
+# Per-test, not a module-level pytestmark. test_the_fixture_premise_holds
+# spends no call and guards the rest of the file, so it must still run on a
+# fresh clone with no key. Under a module mark it skipped with everything else,
+# which is precisely when a broken fixture would go unnoticed.
+needs_key = pytest.mark.skipif(
     not os.getenv("OPENAI_API_KEY"),
     reason="needs OPENAI_API_KEY for the verifier",
 )
@@ -50,10 +55,22 @@ pytestmark = pytest.mark.skipif(
 # visible in the image the verifier is also shown, and it is what makes
 # test_true_of_the_page_but_absent_from_the_regions_is_not_supported
 # discriminating: that claim is TRUE of the page and unestablished by the
-# region. Deleting PARA_B, or naming its metrics inside PARA_A, silently turns
-# that probe back into a duplicate of the absent-content one.
+# region. Deleting PARA_B, or shrinking FONT_SIZE or RENDER_DPI far enough that
+# PARA_B stops being legible to a vision model, turns that probe back into a
+# duplicate of the absent-content one, and it keeps passing while it happens.
+# Those are the edits that fail silently. Naming exact match and F1 inside
+# PARA_A is a different thing and safe: the region would then establish the
+# claim, the verifier would answer supported, and the probe would fail loudly.
+# test_the_fixture_premise_holds guards the silent direction.
 PARA_A = "Evaluation on SlideVQA with three metrics"
 PARA_B = "The metrics are exact match and F1."
+
+# One spelling each, read by both the fixture that draws the page and the
+# fixture that reports the evidence box. They were duplicated literals in two
+# functions, under a docstring claiming they could not drift.
+PARA_A_ORIGIN = (72.0, 200.0)
+PARA_B_ORIGIN = (72.0, 320.0)
+FONT_SIZE = 14.0
 
 EVIDENCE = PARA_A  # a real line of the rendered page, not a paraphrase of one
 
@@ -61,24 +78,32 @@ RENDER_DPI = 150
 
 
 @pytest.fixture(scope="session")
-def probe_page(tmp_path_factory) -> Path:
-    """One page, two well-separated paragraphs, rasterised to PNG.
+def probe_pdf(tmp_path_factory) -> Path:
+    """One page, two well-separated paragraphs.
 
-    Session-scoped because it is identical for all five probes and rendering it
-    per test would be pure waste. The two paragraphs are 120 points apart so no
-    plausible region could be read as covering both.
+    Kept as its own fixture so the premise test can read the text layer back
+    out. The paragraphs are 120 points apart, so no plausible region around one
+    could be read as covering the other.
     """
-    out = tmp_path_factory.mktemp("probe_page")
-    pdf = out / "probe.pdf"
+    pdf = tmp_path_factory.mktemp("probe_page") / "probe.pdf"
     doc = fitz.open()
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
-    page.insert_text((72.0, 200.0), PARA_A, fontsize=14)
-    page.insert_text((72.0, 320.0), PARA_B, fontsize=14)
+    page.insert_text(PARA_A_ORIGIN, PARA_A, fontsize=FONT_SIZE)
+    page.insert_text(PARA_B_ORIGIN, PARA_B, fontsize=FONT_SIZE)
     doc.save(pdf)
     doc.close()
+    return pdf
 
-    doc = fitz.open(pdf)
-    png = out / "probe.png"
+
+@pytest.fixture(scope="session")
+def probe_page(probe_pdf: Path) -> Path:
+    """The rendered PNG, which is what the verifier actually sees.
+
+    Session-scoped because it is identical for all five probes and rendering it
+    per test would be pure waste.
+    """
+    doc = fitz.open(probe_pdf)
+    png = probe_pdf.with_suffix(".png")
     doc[0].get_pixmap(dpi=RENDER_DPI).save(png)
     doc.close()
     return png
@@ -88,21 +113,23 @@ def probe_page(tmp_path_factory) -> Path:
 def evidence_bbox() -> tuple[float, float, float, float]:
     """The normalised box of PARA_A on the rendered page.
 
-    Derived from the same insert_text origin the fixture uses rather than
-    hardcoded, so the two cannot drift. Not load-bearing for the verdict:
-    verify() renders the coordinates into the prompt as text and never crops
-    the image, so the numbers are read by the model as a location description
-    and nothing else. They are computed honestly anyway, because a box that
-    pointed somewhere else would be a lie inside a test about not fabricating
-    evidence.
+    Reads PARA_A_ORIGIN and FONT_SIZE, the same constants probe_pdf draws with,
+    so moving the paragraph moves this box too. Not load-bearing for the
+    verdict: verify() renders the coordinates into the prompt as text and never
+    crops the image, so the model reads them as a location description and
+    nothing else. They are computed honestly anyway, because a box pointing
+    somewhere else would be a lie inside a test about not fabricating evidence,
+    and test_the_fixture_premise_holds checks them against the laid-out text
+    rather than against this arithmetic.
     """
-    ascent, descent = 14.0, 4.0
-    width = fitz.get_text_length(PARA_A, fontsize=14)
+    x0, baseline = PARA_A_ORIGIN
+    ascent, descent = FONT_SIZE, FONT_SIZE * 0.29
+    width = fitz.get_text_length(PARA_A, fontsize=FONT_SIZE)
     return (
-        72.0 / PAGE_W,
-        (200.0 - ascent) / PAGE_H,
-        (72.0 + width) / PAGE_W,
-        (200.0 + descent) / PAGE_H,
+        x0 / PAGE_W,
+        (baseline - ascent) / PAGE_H,
+        (x0 + width) / PAGE_W,
+        (baseline + descent) / PAGE_H,
     )
 
 
@@ -130,9 +157,53 @@ def _judge(page: Path, bbox, claim: str) -> Verdict:
     try:
         return verify(chat, page, claim, [region])
     except Exception as exc:  # noqa: BLE001 - narrowed inside the helper
-        _skip_if_no_quota(exc)
+        skip_if_no_quota(exc)
 
 
+def test_the_fixture_premise_holds(probe_pdf, evidence_bbox):
+    """Guards the flagship probe without spending a call.
+
+    If PARA_B stops being on the page, or starts falling inside the region
+    handed to the verifier, the probe below silently degrades into the
+    absent-content one and still passes. That is how the first version of this
+    file was wrong, and this assertion would have caught it that day.
+
+    Everything here is measured against the laid-out text, never against the
+    arithmetic in evidence_bbox, which is the S2 rule: verify coordinates
+    against rendered ink, not against the numbers that produced them.
+    """
+    page = fitz.open(probe_pdf)[0]
+
+    found_b = page.search_for(PARA_B)
+    assert found_b, f"PARA_B is not on the page at all: {page.get_text()!r}"
+    b = found_b[0]
+
+    found_a = page.search_for(PARA_A)
+    assert found_a, f"PARA_A is not on the page at all: {page.get_text()!r}"
+    a = found_a[0]
+
+    # The evidence box must actually sit on PARA_A. This is what makes the
+    # "cannot drift" claim in evidence_bbox true rather than asserted: move
+    # PARA_A_ORIGIN and only one of the two would follow, and this fails.
+    ex0, ey0, ex1, ey1 = evidence_bbox
+    assert abs(ex0 * PAGE_W - a.x0) < 2.0, f"evidence box x0 {ex0 * PAGE_W} vs PARA_A {a.x0}"
+    assert abs(ey0 * PAGE_H - a.y0) < 6.0, f"evidence box y0 {ey0 * PAGE_H} vs PARA_A {a.y0}"
+    assert abs(ex1 * PAGE_W - a.x1) < 6.0, f"evidence box x1 {ex1 * PAGE_W} vs PARA_A {a.x1}"
+
+    # And it must not reach PARA_B, or the verifier would have been handed the
+    # very text the flagship claim needs.
+    assert not fitz.Rect(ex0 * PAGE_W, ey0 * PAGE_H, ex1 * PAGE_W, ey1 * PAGE_H).intersects(b), (
+        f"the evidence region overlaps PARA_B: {evidence_bbox} vs {b}"
+    )
+
+    # Legible at the DPI the PNG is rendered at. A font or DPI small enough to
+    # make PARA_B unreadable to a vision model is the other silent failure, and
+    # it leaves the text layer above perfectly intact.
+    px = b.height * RENDER_DPI / 72.0
+    assert px >= 12.0, f"PARA_B renders {px:.1f}px tall, too small to read"
+
+
+@needs_key
 def test_the_control_probe_is_supported(probe_page, evidence_bbox):
     """The floor. If this fails the probes below prove nothing, because a
     verifier that rejects everything passes all four of them.
@@ -146,16 +217,19 @@ def test_the_control_probe_is_supported(probe_page, evidence_bbox):
     assert v.label == "supported", f"{v.label} @ {v.confidence}: {v.reason}"
 
 
+@needs_key
 def test_a_changed_number_is_not_supported(probe_page, evidence_bbox):
     v = _judge(probe_page, evidence_bbox, "The evaluation reports seven metrics.")
     assert v.label != "supported", f"{v.label} @ {v.confidence}: {v.reason}"
 
 
+@needs_key
 def test_a_swapped_entity_is_not_supported(probe_page, evidence_bbox):
     v = _judge(probe_page, evidence_bbox, "The evaluation runs on DocVQA.")
     assert v.label != "supported", f"{v.label} @ {v.confidence}: {v.reason}"
 
 
+@needs_key
 def test_absent_content_is_not_supported(probe_page, evidence_bbox):
     """False of the region and absent from the page image too, which is the
     axis the probe below deliberately does not test."""
@@ -163,6 +237,7 @@ def test_absent_content_is_not_supported(probe_page, evidence_bbox):
     assert v.label != "supported", f"{v.label} @ {v.confidence}: {v.reason}"
 
 
+@needs_key
 def test_true_of_the_page_but_absent_from_the_regions_is_not_supported(probe_page, evidence_bbox):
     """THE probe. The other three are false of the page as well as the region.
     This one is TRUE of the page image the verifier is shown, printed on it as

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import _skip_if_no_quota
+from helpers import skip_if_no_quota
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.config import Settings
 
@@ -53,7 +53,7 @@ def test_the_verifier_returns_a_schema_valid_verdict():
     try:
         v = verify(chat, _a_page(), "This page is blank.", [])
     except Exception as exc:  # noqa: BLE001 - narrowed inside the helper
-        _skip_if_no_quota(exc)
+        skip_if_no_quota(exc)
 
     assert isinstance(v, Verdict)
     assert v.label in {"supported", "partially_supported", "unsupported", "insufficient_evidence"}
@@ -77,7 +77,7 @@ def test_a_blank_claim_about_a_real_page_is_not_supported():
     try:
         v = verify(chat, _a_page(), "This page is a photograph of a cat.", [])
     except Exception as exc:  # noqa: BLE001 - narrowed inside the helper
-        _skip_if_no_quota(exc)
+        skip_if_no_quota(exc)
 
     assert v.label != "supported"
 
