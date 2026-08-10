@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import _skip_if_no_quota
 from visual_verify.agent.schemas import ClaimList, Verdict
 from visual_verify.config import Settings
 
@@ -21,32 +22,10 @@ pytestmark = pytest.mark.skipif(
 FIXTURE = Path(__file__).parent.parent / "data" / "pages"
 
 
-def _skip_if_no_quota(exc: Exception) -> None:
-    """Turn an unreachable provider into a skip, but never a wrong answer.
-
-    A 429 with `limit: 0` means the key's project has no quota for the model at
-    all, which is a billing state and not a defect in this code. Failing on it
-    would leave the suite red on any machine whose account is not provisioned,
-    including a fresh clone.
-
-    Deliberately narrow. Only transport and quota problems skip. A response
-    that arrives and is malformed, or a verdict that is simply wrong, must
-    still FAIL: those are the two things this file exists to catch, and
-    swallowing them would make a broken verifier look like an unconfigured one.
-    """
-    text = str(exc)
-    unreachable = (
-        "RESOURCE_EXHAUSTED" in text
-        or "429" in text
-        or "insufficient_quota" in text
-        or "rate limit" in text.lower()
-    )
-    if unreachable:
-        pytest.skip(f"provider reachable but unprovisioned: {text[:160]}")
-    raise exc
-
-
 def _a_page() -> Path:
+    """Any decodable page image. Content is not asserted on here, which is why
+    this is NOT shared with test_verifier_strictness: that file needs a page
+    whose text it knows."""
     if not FIXTURE.exists():
         pytest.skip("no rendered pages; run `vvrag ingest` first")
     pages = sorted(FIXTURE.rglob("*.png"))
