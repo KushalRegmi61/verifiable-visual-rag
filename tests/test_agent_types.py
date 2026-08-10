@@ -9,7 +9,7 @@ from visual_verify.agent.types import FakeChat
 def test_fake_chat_returns_the_scripted_response():
     chat = FakeChat("fake-reader", [ClaimList(claims=["a", "b"])])
     out = chat.structured("prompt", None, ClaimList)
-    assert out.claims == ["a", "b"]
+    assert [c.text for c in out.claims] == ["a", "b"]
 
 
 def test_fake_chat_returns_scripted_responses_in_order():

@@ -113,11 +113,12 @@ def _answer_events(
 ) -> Iterator[AnswerEvent]:
     """The generator half of answer_stream(). Preconditions already checked."""
     yield ReadingStarted()
-    texts = read(reader_chat, image_path, question)
-    yield ClaimsProduced(n=len(texts))
+    drafted = read(reader_chat, image_path, question)
+    yield ClaimsProduced(n=len(drafted))
 
     claims: list[Claim] = []
-    for index, text in enumerate(texts):
+    for index, draft in enumerate(drafted):
+        text = draft.text
         query_vectors = embed_query(text) if embed_query is not None else None
         try:
             regions = ground(
@@ -153,6 +154,7 @@ def _answer_events(
             reason=verdict.reason,
             abstained=score < threshold,
             compound=is_compound(text),
+            starts_paragraph=draft.starts_paragraph,
         )
         claims.append(claim)
         yield ClaimVerified(index=index, claim=claim)

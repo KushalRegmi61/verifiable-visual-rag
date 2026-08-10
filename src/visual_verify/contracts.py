@@ -70,6 +70,11 @@ class Claim(BaseModel):
     # the reason is the only thing left that explains the refusal. S7 puts it
     # in the eval output for the same purpose.
     reason: str | None = None
+    # True when this claim opens a new paragraph in the displayed answer. Set
+    # by the reader, carried through verification untouched, and read only by
+    # the UI. Metadata rather than text, so it adds nothing unverified to the
+    # screen and every sentence still maps to exactly one region.
+    starts_paragraph: bool = False
 
     @property
     def withheld(self) -> bool:

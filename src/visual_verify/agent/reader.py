@@ -11,7 +11,7 @@ so nothing can drift between what is shown and what is verified.
 import re
 from pathlib import Path
 
-from visual_verify.agent.schemas import ClaimList
+from visual_verify.agent.schemas import ClaimList, DraftedClaim
 from visual_verify.agent.types import StructuredChat
 
 PROMPT = """You are reading one page of a document to answer a question.
@@ -75,7 +75,7 @@ def is_compound(claim: str) -> bool:
     return bool(_VERB.search(before) and _VERB.search(after))
 
 
-def read(chat: StructuredChat, image_path: Path, question: str) -> list[str]:
-    """Atomic claims answering `question` from the page at `image_path`."""
+def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
+    """The drafted answer for `question`, one sentence per claim."""
     out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
     return list(out.claims)

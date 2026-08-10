@@ -10,7 +10,7 @@ from visual_verify.agent.types import FakeChat
 def test_read_returns_the_models_claims():
     chat = FakeChat("m", [ClaimList(claims=["Revenue grew.", "Margins held."])])
     claims = read(chat, Path("page.png"), "What happened?")
-    assert claims == ["Revenue grew.", "Margins held."]
+    assert [c.text for c in claims] == ["Revenue grew.", "Margins held."]
 
 
 def test_read_sends_the_question_and_the_page_image():

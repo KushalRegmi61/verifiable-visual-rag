@@ -42,7 +42,7 @@ def test_the_reader_returns_schema_valid_claims():
     claims = read(chat, _a_page(), "What is this page about?")
 
     assert isinstance(claims, list)
-    assert all(isinstance(c, str) and c.strip() for c in claims)
+    assert all(c.text.strip() for c in claims)
 
 
 def test_the_verifier_returns_a_schema_valid_verdict():

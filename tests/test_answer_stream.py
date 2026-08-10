@@ -179,3 +179,47 @@ def test_a_reader_that_returns_nothing_reports_a_count_of_zero():
     assert isinstance(events[2], AnswerComplete)
     assert events[2].answer.abstained_overall is True
     assert len(events) == 3
+
+
+def test_the_paragraph_break_survives_the_trip_from_reader_to_claim():
+    """The only place starts_paragraph crosses a layer boundary.
+
+    Everything else about the field is schema-level, so deleting the kwarg in
+    core.py, or hardcoding it to False, leaves the rest of the suite green while
+    the displayed answer renders as one paragraph forever. That is this repo's
+    recurring failure shape: correctly-shaped output, wrong value, nothing
+    notices.
+
+    Two claims, not one, and they disagree. A single-claim fixture passes
+    against a hardcoded True as easily as against the real copy.
+    """
+    reader = FakeChat(
+        "r",
+        [
+            ClaimList(
+                claims=[
+                    {"text": "Revenue grew 42 percent"},
+                    {"text": "Margins held steady", "starts_paragraph": True},
+                ]
+            )
+        ],
+    )
+    verifier = FakeChat(
+        "v",
+        [
+            Verdict(label="supported", confidence=0.9, reason="matches"),
+            Verdict(label="supported", confidence=0.9, reason="matches"),
+        ],
+    )
+
+    out = answer(
+        "What happened?",
+        Path("p.png"),
+        page_boxes(),
+        page=0,
+        reader_chat=reader,
+        verifier_chat=verifier,
+    )
+
+    assert out.claims[0].starts_paragraph is False
+    assert out.claims[1].starts_paragraph is True

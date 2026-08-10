@@ -187,3 +187,8 @@ def test_the_abstention_flag_cannot_be_set_against_the_claims():
 
     assert Answer(question="q", claims=[passes]).abstained_overall is False
     assert Answer(question="q", claims=[passes], abstained_overall=True).abstained_overall is False
+
+
+def test_claim_defaults_to_not_starting_a_paragraph():
+    """Additive optional field: every existing construction site still works."""
+    assert Claim(text="x", confidence=0.5).starts_paragraph is False

@@ -12,7 +12,8 @@ def test_a_repeated_call_hits_the_cache_instead_of_the_model(tmp_path):
     first = chat.structured("p", None, ClaimList)
     second = chat.structured("p", None, ClaimList)
 
-    assert first.claims == second.claims == ["a"]
+    assert first.claims == second.claims
+    assert first.claims[0].text == "a"
     assert len(inner.calls) == 1, "the second call should not have reached the model"
 
 
@@ -20,8 +21,8 @@ def test_a_different_prompt_misses(tmp_path):
     inner = FakeChat("m1", [ClaimList(claims=["a"]), ClaimList(claims=["b"])])
     chat = CachedChat(inner, tmp_path)
 
-    assert chat.structured("p1", None, ClaimList).claims == ["a"]
-    assert chat.structured("p2", None, ClaimList).claims == ["b"]
+    assert chat.structured("p1", None, ClaimList).claims[0].text == "a"
+    assert chat.structured("p2", None, ClaimList).claims[0].text == "b"
 
 
 def test_a_different_model_id_misses(tmp_path):
@@ -30,8 +31,8 @@ def test_a_different_model_id_misses(tmp_path):
     a = FakeChat("openai:gpt-4o", [ClaimList(claims=["from-a"])])
     b = FakeChat("google:gemini", [ClaimList(claims=["from-b"])])
 
-    assert CachedChat(a, tmp_path).structured("p", None, ClaimList).claims == ["from-a"]
-    assert CachedChat(b, tmp_path).structured("p", None, ClaimList).claims == ["from-b"]
+    assert CachedChat(a, tmp_path).structured("p", None, ClaimList).claims[0].text == "from-a"
+    assert CachedChat(b, tmp_path).structured("p", None, ClaimList).claims[0].text == "from-b"
 
 
 def test_the_cache_survives_a_new_process(tmp_path):
@@ -41,7 +42,7 @@ def test_the_cache_survives_a_new_process(tmp_path):
     CachedChat(inner, tmp_path).structured("p", None, ClaimList)
 
     cold = FakeChat("m1", [])  # empty script: any model call now fails loudly
-    assert CachedChat(cold, tmp_path).structured("p", None, ClaimList).claims == ["a"]
+    assert CachedChat(cold, tmp_path).structured("p", None, ClaimList).claims[0].text == "a"
 
 
 def test_a_different_image_misses(tmp_path):
@@ -54,8 +55,8 @@ def test_a_different_image_misses(tmp_path):
     inner = FakeChat("m1", [ClaimList(claims=["a"]), ClaimList(claims=["b"])])
     chat = CachedChat(inner, tmp_path / "cache")
 
-    assert chat.structured("p", one, ClaimList).claims == ["a"]
-    assert chat.structured("p", two, ClaimList).claims == ["b"]
+    assert chat.structured("p", one, ClaimList).claims[0].text == "a"
+    assert chat.structured("p", two, ClaimList).claims[0].text == "b"
 
 
 def test_the_key_is_unambiguous_across_part_boundaries(tmp_path):
