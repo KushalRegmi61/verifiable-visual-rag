@@ -183,11 +183,15 @@ def _content_words(text: str) -> set[str]:
     """Lowercased words with stopwords dropped and a trailing s stripped.
 
     The stopword filter runs BEFORE the trailing s is stripped, on purpose.
-    "does" is not itself in `_STOPWORDS`, only "do"; if stripping ran first
-    "does" would already be "doe" by the time the filter saw it, and "doe" is
-    not a word the filter will ever recognize. Filtering the raw token first
-    means the list only has to name the word people actually type, not every
-    stem an inflection could turn it into.
+    Because the filter sees the RAW token, `_STOPWORDS` has to name the
+    inflected forms people actually type: "is", "as", "has", "was", "its",
+    "his", "does", not their stems. If stripping ran first, every one of
+    those entries would be dead on arrival: the filter would be handed "i",
+    "a", "ha", "wa", "it", "hi", "doe" instead, and match none of them.
+    "does" to "doe" is the illustration: filter-first catches "does" because
+    it is in the list; strip-first would have already turned it into "doe"
+    by the time any filter ran, and "doe" is not a word the list will ever
+    recognize.
 
     Strips at most ONE trailing s, not `str.rstrip("s")`'s "all of them":
     rstrip removes the whole trailing run, so a word ending in a doubled s
@@ -222,16 +226,25 @@ def shares_content_word(previous: str, claim: str) -> bool:
     The stopword list is what makes it mean anything. Every pair of English
     sentences shares "the" or "is", so without it the answer is always True.
 
-    Known false-chain sources, in the direction that actually costs
-    something: two claims can share a content word by pure accident of
-    English function-word usage and get counted as chained when they are not.
-    `_STOPWORDS` is a closed, hand-maintained list, not a linguistic
-    resource, so any function word outside it (a preposition, a modal, a
-    determiner nobody added yet) still counts as content and can produce a
-    match neither claim intended. A measured chained-pair rate from this
-    function is therefore an upper bound on real chaining, not a
-    measurement of it: it can overstate how connected an answer is, never
-    understate it.
+    Errs in both directions, and a measured chained-pair rate is neither an
+    upper nor a lower bound on real chaining.
+
+    Overcounting is the more likely and more costly direction: two claims can
+    share a content word by pure accident of English function-word usage and
+    get counted as chained when they are not. `_STOPWORDS` is a closed,
+    hand-maintained list, not a linguistic resource, so any function word
+    outside it (a preposition, a modal, a determiner nobody added yet) still
+    counts as content and can produce a match neither claim intended.
+
+    But it also undercounts, on genuine chains that use an inflection
+    `_content_words` does not reunite. A "-es" or "-ies" plural does not
+    match its singular: "analyses" strips to "analyse" against "analysis",
+    and "policies" strips to "policie" against "policy". And `_WORD` requiring
+    a leading letter, which exists to keep bare numbers out of false chains,
+    also drops a genuinely repeated bare number: "2026" in one claim and
+    "2026" in the next never becomes a token at all, so a real repetition is
+    invisible to this function. Whoever sets a floor on this rate should have
+    both misses in view, not just the overcount.
     """
     return bool(_content_words(previous) & _content_words(claim))
 
