@@ -1,4 +1,4 @@
-import type { ClaimEvent, ClaimLabel } from "./api";
+import type { ClaimEvent, ClaimLabel, DoneEvent } from "./api";
 
 /**
  * Explicit hex rather than Tailwind classes. The colour is chosen at runtime
@@ -75,6 +75,31 @@ export function toneFor(label: ClaimLabel | null): Tone {
  * one paragraph. That is the correct degradation, not a bug this function is
  * meant to fix.
  */
+/**
+ * Whether the system is declining to answer, as early as it is knowable.
+ *
+ * The rule itself is not restated here. `abstained_overall` and
+ * `abstains_answer` are both computed server-side from `Claim.withheld` and
+ * `LEAD_INDEX`; this only picks whichever of the two has arrived.
+ *
+ * It cannot DISAGREE with the server, only precede it. `abstains_answer` is
+ * `index == LEAD_INDEX and withheld`, which strictly implies
+ * `abstained_overall`, so a refusal shown on a claim frame is never one the
+ * eventual `done` frame contradicts. It is the same conclusion, reached before
+ * the remaining verifier calls are spent. Without it the answer panel renders
+ * surviving support under an "Answer" heading for tens of seconds on a serial
+ * GPU and then retracts the assertion that those sentences answer the
+ * question, which is the one thing the lead rule was added to prevent.
+ *
+ * It reads the flag off whichever claim carries it rather than indexing
+ * `claims[0]`, so it holds regardless of arrival order. Nothing emits claims
+ * out of order today, and this stops that from being load-bearing.
+ */
+export function isAbstaining(claims: ClaimEvent[], done: DoneEvent | null): boolean {
+  if (done) return done.abstained_overall;
+  return claims.some((c) => c.abstains_answer);
+}
+
 export function groupIntoParagraphs(claims: ClaimEvent[]): ClaimEvent[][] {
   const groups: ClaimEvent[][] = [];
   for (const claim of claims) {

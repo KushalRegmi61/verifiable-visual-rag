@@ -24,6 +24,12 @@ export type ClaimEvent = {
   // Where the answer breaks into a new paragraph. Set by the reader, which is
   // the only thing that knows where the topic turns.
   starts_paragraph: boolean;
+  // True only on the lead claim, and only when it was withheld. It says the
+  // answer is already abstaining, while claims are still arriving and long
+  // before `done`. Non-optional, like starts_paragraph: the wire always sends
+  // it, and an `undefined` reading as falsy would mean "not abstaining", which
+  // is the wrong direction to fail in.
+  abstains_answer: boolean;
 };
 
 export type Candidate = {

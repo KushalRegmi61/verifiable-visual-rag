@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { groupIntoParagraphs } from "./claims";
-import type { ClaimEvent } from "./api";
+import { groupIntoParagraphs, isAbstaining } from "./claims";
+import type { ClaimEvent, DoneEvent } from "./api";
 
 function claim(index: number, starts_paragraph = false): ClaimEvent {
   return {
@@ -13,7 +13,22 @@ function claim(index: number, starts_paragraph = false): ClaimEvent {
     withheld: false,
     starts_paragraph,
     regions: [],
+    abstains_answer: false,
   };
+}
+
+/** A withheld lead, as the wire sends it: no regions, abstains_answer set. */
+function abstainingLead(index = 0): ClaimEvent {
+  return {
+    ...claim(index),
+    label: "unsupported",
+    withheld: true,
+    abstains_answer: true,
+  };
+}
+
+function done(abstained_overall: boolean): DoneEvent {
+  return { shown: 0, withheld: 0, abstained_overall };
 }
 
 describe("groupIntoParagraphs", () => {
@@ -72,5 +87,49 @@ describe("groupIntoParagraphs", () => {
 
   it("returns nothing for an empty answer", () => {
     expect(groupIntoParagraphs([])).toEqual([]);
+  });
+});
+
+describe("isAbstaining", () => {
+  it("is false before any claim has arrived", () => {
+    // Nothing has been judged yet, so there is nothing to decline. Returning
+    // true here would make every question open on a refusal.
+    expect(isAbstaining([], null)).toBe(false);
+  });
+
+  it("abstains on the lead's own claim frame, before done arrives", () => {
+    // THE test. The server emits every ClaimVerified before AnswerComplete, so
+    // waiting for `done` means rendering the surviving support under an
+    // "Answer" heading for one verifier call per remaining claim and then
+    // retracting it.
+    expect(isAbstaining([abstainingLead()], null)).toBe(true);
+  });
+
+  it("does not abstain while the lead is surviving", () => {
+    expect(isAbstaining([claim(0), claim(1)], null)).toBe(false);
+  });
+
+  it("does not abstain when only a later claim was withheld", () => {
+    // A withheld claim that is not the lead carries abstains_answer false, so
+    // support failing verification never turns an answer into a refusal.
+    const support: ClaimEvent = { ...claim(2), withheld: true };
+    expect(isAbstaining([claim(0), support], null)).toBe(false);
+  });
+
+  it("takes done as the authority once it arrives", () => {
+    // done abstains on a second condition the claim frames cannot express,
+    // "nothing survived", which is reachable with an empty list on this side.
+    expect(isAbstaining([], done(true))).toBe(true);
+  });
+
+  it("prefers done over the claim frames when both are present", () => {
+    expect(isAbstaining([claim(0)], done(true))).toBe(true);
+    expect(isAbstaining([abstainingLead()], done(false))).toBe(false);
+  });
+
+  it("finds the flag regardless of arrival order", () => {
+    // It reads the flag off whichever claim carries it rather than indexing
+    // claims[0], so nothing here depends on the lead landing first.
+    expect(isAbstaining([claim(1), claim(2), abstainingLead(0)], null)).toBe(true);
   });
 });

@@ -9,6 +9,7 @@ import {
   type DoneEvent,
   type RetrievedEvent,
 } from "@/lib/api";
+import { isAbstaining } from "@/lib/claims";
 import type { Region } from "@/lib/overlay";
 import { AnswerPanel } from "@/components/AnswerPanel";
 import { EvidenceVault } from "@/components/EvidenceVault";
@@ -162,7 +163,10 @@ export default function Home() {
   // side agree rather than relying on that alone.
   const shown = claims.filter((c) => !c.withheld);
   const withheld = claims.filter((c) => c.withheld);
-  const abstained = done?.abstained_overall ?? false;
+  // The full `claims` array, not `shown`. A withheld lead is filtered out of
+  // `shown` by construction, so the flag that says the answer is abstaining
+  // only exists on the unfiltered list.
+  const abstained = isAbstaining(claims, done);
   const imageUrl = retrieved
     ? `${API}/documents/${retrieved.doc_sha}/pages/${retrieved.page}/image`
     : null;
@@ -190,13 +194,20 @@ export default function Home() {
     });
   }, []);
 
-  const status = pending
-    ? retrieved === null
-      ? "Retrieving the best page"
-      : expectedCount === null
-        ? "Reading the page"
-        : `Verifying claim ${Math.min(claims.length + 1, expectedCount)} of ${expectedCount}`
-    : null;
+  // `!done` as well as `pending`, because `pending` is cleared in run's
+  // `finally`, one or more ticks after onDone lands. Without it there is a
+  // commit where the decline card renders above a live "Verifying claim 3 of
+  // 3" skeleton. It also composes with the early abstention: the decline now
+  // appears on the lead's claim frame and SHOULD sit above a still-running
+  // verify line until `done`.
+  const status =
+    pending && !done
+      ? retrieved === null
+        ? "Retrieving the best page"
+        : expectedCount === null
+          ? "Reading the page"
+          : `Verifying claim ${Math.min(claims.length + 1, expectedCount)} of ${expectedCount}`
+      : null;
 
   return (
     <>
@@ -248,8 +259,13 @@ export default function Home() {
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-8">
             <div className="min-w-0">
+              {/* The decline is otherwise invisible on this channel: announcing
+                  "Answer complete" while the visible copy reads "I could not
+                  answer this from this page" tells a screen reader user the
+                  opposite of what is on screen, and this is the only place they
+                  would hear about it. */}
               <p aria-live="polite" className="sr-only">
-                {status ?? (done ? "Answer complete" : "")}
+                {status ?? (done ? (abstained ? "No answer given" : "Answer complete") : "")}
               </p>
 
               {retrieved?.warning && (
@@ -278,7 +294,7 @@ export default function Home() {
                         the evidence when the real cause is that nobody ran
                         `vvrag embed`. */}
                     {retrieved?.warning &&
-                      " Note the warning above: this page has no embeddings, so that is" +
+                      " Note the warning above: this page has no embeddings, so this is" +
                         " very likely a missing index rather than weak evidence."}
                   </p>
                   {/* Under the lead rule, abstaining no longer means nothing
@@ -338,9 +354,12 @@ export default function Home() {
                 pageAspect={pageAspect}
               />
 
-              {done && !abstained && shown.length === 0 && (
-                <p className="mt-3 text-sm text-muted">No claims to show.</p>
-              )}
+              {/* "No claims to show" used to live here and was unreachable by
+                  construction: this client's `shown` filter is the same
+                  predicate as the server's Answer.shown, and abstained_overall
+                  is true whenever nothing survived, so `done && !abstained`
+                  already implies shown.length > 0. It read as a live state and
+                  was not one. The refusal is the card above. */}
             </div>
 
             {/* Sticky on desktop so the page stays in view while the evidence
