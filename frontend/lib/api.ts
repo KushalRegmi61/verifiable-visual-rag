@@ -21,6 +21,9 @@ export type ClaimEvent = {
   compound: boolean;
   withheld: boolean;
   regions: Region[];
+  // Where the answer breaks into a new paragraph. Set by the reader, which is
+  // the only thing that knows where the topic turns.
+  starts_paragraph: boolean;
 };
 
 export type Candidate = {

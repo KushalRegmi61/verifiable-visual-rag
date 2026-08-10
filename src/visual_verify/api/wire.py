@@ -46,6 +46,10 @@ def _claim(index: int, c: Claim) -> dict:
         "compound": c.compound,
         "withheld": withheld,
         "regions": [] if withheld else [_region(r) for r in c.regions],
+        # Where the answer breaks into a new paragraph. Metadata, not text: it
+        # adds nothing unverified to the screen and every claim still maps to
+        # exactly one region.
+        "starts_paragraph": c.starts_paragraph,
     }
 
 

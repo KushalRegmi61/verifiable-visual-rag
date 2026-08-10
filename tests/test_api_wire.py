@@ -185,3 +185,39 @@ def test_a_candidate_with_no_name_falls_back_to_a_short_sha():
     _, payload = to_frame(Retrieved(page=prepared, score=9.4, candidates=[orphan]))
 
     assert payload["candidates"][0]["doc_name"] == "0123456789ab"
+
+
+def test_a_claim_carries_its_paragraph_break():
+    """The UI cannot infer a topic turn from the text, and the reader is the
+    only thing that knows where one is. Dropping the flag here silently
+    collapses every answer back into one block."""
+    from visual_verify.agent.events import ClaimVerified
+
+    c = Claim(
+        text="The ablation removes the added layer.",
+        regions=[region()],
+        confidence=0.9,
+        label="supported",
+        reason="stated in the evidence",
+        abstained=False,
+        starts_paragraph=True,
+    )
+
+    _, payload = to_frame(ClaimVerified(index=2, claim=c))
+
+    assert payload["starts_paragraph"] is True
+
+
+def test_a_withheld_claim_still_carries_its_paragraph_break():
+    """It is stripped of regions, not of everything. The UI reads the flag for
+    every claim it lays out, and a withheld claim that reported the wrong
+    break would shift the paragraph break onto the wrong sentence."""
+    from visual_verify.agent.events import ClaimVerified
+
+    c = withheld_claim()
+    c = c.model_copy(update={"starts_paragraph": True})
+
+    _, payload = to_frame(ClaimVerified(index=1, claim=c))
+
+    assert payload["regions"] == []
+    assert payload["starts_paragraph"] is True
