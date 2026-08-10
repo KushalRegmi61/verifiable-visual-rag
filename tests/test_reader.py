@@ -1,6 +1,9 @@
 """Claim extraction, and the compound-claim check the schema cannot do."""
 
+import warnings
 from pathlib import Path
+
+import pytest
 
 from visual_verify.agent.reader import is_compound, opens_with_anaphora, read, shares_content_word
 from visual_verify.agent.schemas import ClaimList
@@ -247,3 +250,43 @@ def test_each_does_not_count_as_chaining():
         "Each variant is evaluated separately.",
         "Each metric is reported once.",
     ) is False
+
+
+def test_read_warns_when_the_model_returned_bare_strings():
+    """Bare strings mean the provider ignored the output schema.
+
+    The prompt asks the model to set starts_paragraph. If the claims arrive as
+    plain strings, ClaimList coerces them, every claim silently takes False,
+    and the answer renders as one paragraph forever with nothing raising and
+    no test failing. The warning is the only signal that exists, so it is
+    tested rather than assumed."""
+    chat = FakeChat("m", [ClaimList(claims=["Revenue grew.", "Margins held."])])
+
+    with pytest.warns(UserWarning, match="bare strings"):
+        claims = read(chat, Path("page.png"), "What happened?")
+
+    # Warned, never refused: a single-paragraph answer is still an answer.
+    assert [c.text for c in claims] == ["Revenue grew.", "Margins held."]
+
+
+def test_read_does_not_warn_on_properly_shaped_output():
+    """The other half. A warning that fires on correct output is noise nobody
+    reads, and it would fire on every call, since the coercion path is the
+    common one across the test suite."""
+    chat = FakeChat(
+        "m",
+        [
+            ClaimList(
+                claims=[
+                    {"text": "Revenue grew.", "starts_paragraph": False},
+                    {"text": "Margins held.", "starts_paragraph": True},
+                ]
+            )
+        ],
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        claims = read(chat, Path("page.png"), "What happened?")
+
+    assert claims[1].starts_paragraph is True

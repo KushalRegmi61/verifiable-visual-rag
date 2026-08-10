@@ -71,7 +71,10 @@ def test_a_bare_string_is_still_accepted_as_a_claim():
     """Coercion, kept deliberately. Roughly forty existing construction sites
     across the test suite pass plain strings, and rewriting them all to
     dictionaries would be a large diff that tests nothing. A model that returns
-    strings gets starts_paragraph False, which is the right default."""
+    strings gets starts_paragraph False, which is fine from a test fixture and
+    is NOT a good outcome from a live provider: the prompt asks for the field,
+    so this branch firing there means the model ignored the schema and the
+    paragraph feature is inert. read() warns when that happens."""
     parsed = ClaimList(claims=["Revenue grew 42 percent."])
 
     assert parsed.claims[0].text == "Revenue grew 42 percent."

@@ -92,3 +92,44 @@ def test_reader_output_parses_as_the_claim_schema():
     out = chat.structured("List two facts about this page.", _a_page(), ClaimList)
 
     assert isinstance(out, ClaimList)
+
+
+def test_the_drafted_answer_holds_together():
+    """The four drafting rules, against a real model on a real page.
+
+    A fake cannot test this: the rules are instructions to a model and the only
+    thing that can fail them is a model. Asserted as a floor rather than a
+    quality bar, because "reads well" is not something a test can decide.
+
+    A failure here is not automatically the reader's fault. `shares_content_word`
+    errs in BOTH directions, and its known UNDERCOUNTS look exactly like a
+    reader that stopped chaining: an "-es" or "-ies" plural is not reunited with
+    its singular ("analyses" against "analysis", "policies" against "policy"),
+    and a genuinely repeated bare number never becomes a token at all, because
+    `_WORD` requires a leading letter. So check the reported claims by eye before
+    editing the prompt; the stemmer is as likely a cause as the model. The
+    threshold is deliberately not loosened to cover that, since a failure is
+    information either way.
+    """
+    from visual_verify.agent.models import make_chat
+    from visual_verify.agent.reader import opens_with_anaphora, read, shares_content_word
+
+    chat = make_chat("reader", Settings.from_env())
+    claims = read(chat, _a_page(), "What is this page about?")
+
+    if not claims:
+        pytest.skip("the reader found no answer on this page, which is a valid outcome")
+
+    dangling = [c.text for c in claims if opens_with_anaphora(c.text)]
+    assert not dangling, f"claims that would break if their predecessor were withheld: {dangling}"
+
+    unchained = [
+        claims[i].text
+        for i in range(1, len(claims))
+        if not shares_content_word(claims[i - 1].text, claims[i].text)
+    ]
+    # A floor, not a bar. One topic turn in a long answer is legitimate; a
+    # majority of unchained claims means the reader is listing, not answering.
+    assert len(unchained) <= len(claims) // 3, (
+        f"claims sharing nothing with their predecessor: {unchained}"
+    )

@@ -6,7 +6,10 @@ mis-parsed claim list is exactly the correctly-shaped wrong output this
 repository keeps getting caught by.
 """
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Any
+
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic_core.core_schema import ValidatorFunctionWrapHandler
 
 from visual_verify.agent.rubric import Label
 
@@ -45,6 +48,40 @@ class ClaimList(BaseModel):
 
     claims: list[DraftedClaim] = Field(default_factory=list)
 
+    # A PrivateAttr, not a field, on purpose: this must never appear in the JSON
+    # schema handed to the provider, or the model would be asked to report on
+    # its own parsing.
+    _from_bare_strings: bool = PrivateAttr(default=False)
+
+    @property
+    def from_bare_strings(self) -> bool:
+        """Whether `_accept_bare_strings` had to coerce anything on the way in.
+
+        True against a live provider means the model ignored the schema, which
+        `read()` turns into a warning. Exposed as a property so the caller is
+        not reaching into a private attribute across module lines.
+        """
+        return self._from_bare_strings
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _remember_bare_strings(
+        cls, data: Any, handler: ValidatorFunctionWrapHandler
+    ) -> "ClaimList":
+        """Record whether the coercion below fired, before it erases the evidence.
+
+        It has to run here rather than inside `_accept_bare_strings`: a field
+        validator returns a value and cannot touch the instance, which does not
+        exist yet, and warning from inside it would fire for each of the forty
+        test sites that legitimately pass strings rather than once per read().
+        """
+        raw = data.get("claims") if isinstance(data, dict) else None
+        bare = isinstance(raw, list) and any(isinstance(c, str) for c in raw)
+        model = handler(data)
+        if bare:
+            model._from_bare_strings = True
+        return model
+
     @field_validator("claims", mode="before")
     @classmethod
     def _accept_bare_strings(cls, v: object) -> object:
@@ -60,7 +97,10 @@ class ClaimList(BaseModel):
         answer renders as one paragraph forever with no error, no warning, and
         no failing test. That is harmless only while nothing asks the model for
         the field. Once the prompt requests it, this branch firing means the
-        paragraph feature is inert, and the coercion is what hides it.
+        paragraph feature is inert, and the coercion is what hides it. The
+        prompt now asks for it, so `_remember_bare_strings` records that this
+        branch fired and `read()` warns; the coercion still happens, because a
+        degraded answer beats no answer.
         """
         if isinstance(v, list):
             return [{"text": c} if isinstance(c, str) else c for c in v]

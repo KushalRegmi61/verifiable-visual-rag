@@ -9,19 +9,49 @@ so nothing can drift between what is shown and what is verified.
 """
 
 import re
+import warnings
 from pathlib import Path
 
 from visual_verify.agent.schemas import ClaimList, DraftedClaim
 from visual_verify.agent.types import StructuredChat
 
-PROMPT = """You are reading one page of a document to answer a question.
+PROMPT = """You are answering a question from one page of a document, for
+someone who cannot see the page.
 
-Answer ONLY from what is visible on this page. If the page does not answer the
+Answer only from what is visible on this page. If the page does not answer the
 question, return an empty list of claims.
 
-Break your answer into atomic claims. Each claim must assert exactly ONE thing,
-because each claim will be matched to a single region of the page as its
-evidence. A claim asserting two things cannot be evidenced by one region.
+Compose the answer as connected prose, then return it as one sentence per
+claim, in the order they should be read. Every sentence is checked separately
+against the page, and any sentence may be removed before the answer is shown,
+so the sentences must obey four rules.
+
+1. The FIRST sentence answers the question directly. Not background, not what
+   the page is about. Someone who read only that sentence should have the
+   answer.
+
+2. Each sentence asserts exactly ONE thing. Each sentence is matched to a
+   single region of the page as its evidence, and a sentence asserting two
+   things cannot be evidenced by one region.
+
+3. Each sentence stands on its own. Never refer back to the previous sentence
+   or to anything above: no sentence may begin with it, they, them, such, or
+   Additionally, and no sentence may use a pronoun whose meaning is only in an
+   earlier sentence. Repeat the noun instead. Pointing at what you are looking
+   at is fine, because it does not depend on any other sentence: "This page",
+   "This figure", "This table" all stand on their own.
+
+4. Connect each sentence to the one before it by repeating a noun phrase from
+   the end of that sentence, never by a pronoun. "The evaluation compares three
+   variants. Each of the three variants is scored on ..." reads as one answer.
+   "The evaluation compares three variants. Each of them is scored on ..."
+   becomes nonsense the moment the first sentence is removed.
+
+Write the way you would answer a colleague who asked you out loud. Do not
+describe the page. State what it says.
+
+Set starts_paragraph on a sentence that opens a new topic, and leave it false
+otherwise. Most answers are a single paragraph.
 
 Question: {question}"""
 
@@ -250,6 +280,21 @@ def shares_content_word(previous: str, claim: str) -> bool:
 
 
 def read(chat: StructuredChat, image_path: Path, question: str) -> list[DraftedClaim]:
-    """The drafted answer for `question`, one sentence per claim."""
+    """The drafted answer for `question`, one sentence per claim.
+
+    Warns, once, when the provider returned bare strings instead of objects.
+    The prompt asks for `starts_paragraph`, so bare strings mean the schema was
+    ignored: `ClaimList` coerces them and every claim silently takes False, the
+    answer renders as one paragraph forever, and nothing raises or fails. A
+    warning rather than an exception, because a single-paragraph answer is
+    still an answer and refusing to return it would be the worse failure.
+    """
     out = chat.structured(PROMPT.format(question=question), image_path, ClaimList)
+    if out.from_bare_strings:
+        warnings.warn(
+            f"{chat.model_id} returned claims as bare strings instead of objects, so it "
+            "ignored the output schema: starts_paragraph is False on every claim and the "
+            "answer will render as a single paragraph regardless of its content",
+            stacklevel=2,
+        )
     return list(out.claims)
