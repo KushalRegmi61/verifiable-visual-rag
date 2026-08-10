@@ -37,78 +37,130 @@ function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+/** Everything one page's answer is made of. */
+type PageResult = {
+  retrieved: RetrievedEvent;
+  expected: number | null;
+  claims: ClaimEvent[];
+  done: DoneEvent | null;
+};
+
+function keyOf(docSha: string, page: number): string {
+  return `${docSha}:${page}`;
+}
+
 export default function Home() {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState("");
   const [pending, setPending] = useState(false);
-  const [retrieved, setRetrieved] = useState<RetrievedEvent | null>(null);
-  // Held separately from `retrieved` and NOT cleared on a pinned re-ask. The
+  // Every page read for the current question, keyed doc_sha:page. Answering one
+  // page costs a reader call plus a verifier call per claim on a serial GPU, so
+  // re-reading a page the user has already seen just to get back to it is the
+  // most expensive thing this UI could do. Keeping the results makes flipping
+  // between retrieved pages free, and makes comparing what page 7 supports
+  // against what page 12 supports possible at all, which is the only reason to
+  // show more than one page.
+  const [results, setResults] = useState<Record<string, PageResult>>({});
+  const [active, setActive] = useState<string | null>(null);
+  // Held separately from `results` and NOT cleared on a pinned re-ask. The
   // pinned branch of _choose_page returns candidates: [] by construction, so
-  // reading the list off `retrieved` made it single-use: click one alternate
-  // page and the row vanishes, and getting back to the original page means
-  // retyping the question and paying for retrieval plus the whole
-  // reader/verifier loop again. This is the UI's only affordance for the
+  // reading the list off the current page made it single-use: click one
+  // alternate page and the row vanishes, and getting back to the original page
+  // means retyping the question. This is the UI's only affordance for the
   // retrieval-was-wrong case, which is exactly the case worth demonstrating.
   const [alternates, setAlternates] = useState<Candidate[]>([]);
-  const [expected, setExpected] = useState<number | null>(null);
-  const [claims, setClaims] = useState<ClaimEvent[]>([]);
-  const [done, setDone] = useState<DoneEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
 
-  const run = useCallback(async (q: string, pin?: { doc: string; page: number }) => {
-    const text = q.trim();
-    if (!text) return;
-    setPending(true);
-    setAsked(text);
-    setError(null);
-    setRetrieved(null);
-    // Kept across a pinned re-ask, cleared when a new question is asked: the
-    // ranking belongs to the question, not to the page currently displayed.
-    if (!pin) setAlternates([]);
-    setExpected(null);
-    setClaims([]);
-    setDone(null);
-    setHovered(null);
-    try {
-      await ask(
-        pin ? { question: text, doc: pin.doc, page: pin.page } : { question: text },
-        {
-          onRetrieved: (e) => {
-            setRetrieved(e);
-            // Only a fresh retrieval knows the ranking. A pinned re-ask carries
-            // an empty list, and overwriting with it would discard the only
-            // record of what else was considered.
-            //
-            // The top hit is prepended because the service sends candidates as
-            // hits[1:]. Without it, clicking an alternate is one-way: there
-            // would be no button for the page retrieval actually chose.
-            if (!pin) {
-              setAlternates([
-                {
-                  doc_sha: e.doc_sha,
-                  page: e.page,
-                  score: e.score ?? 0,
-                  doc_name: e.doc_name,
-                },
-                ...e.candidates,
-              ]);
-            }
+  const run = useCallback(
+    async (q: string, pin?: { doc: string; page: number }) => {
+      const text = q.trim();
+      if (!text) return;
+
+      // Already read for this question: show it, spend nothing. Only reachable
+      // from a candidate chip, which is always pinned, so a fresh question can
+      // never be short-circuited by a page left over from the last one.
+      if (pin && results[keyOf(pin.doc, pin.page)]) {
+        setActive(keyOf(pin.doc, pin.page));
+        setHovered(null);
+        return;
+      }
+
+      setPending(true);
+      setAsked(text);
+      setError(null);
+      setHovered(null);
+      setActive(null);
+      // Both the cache and the ranking belong to the question rather than to
+      // the page on screen, so a new question drops both and a pinned re-ask
+      // keeps both.
+      if (!pin) {
+        setResults({});
+        setAlternates([]);
+      }
+
+      // Set by the retrieved frame, which always arrives first, and read by
+      // every frame after it. A local rather than state, because the claim
+      // handler needs the value inside this same stream.
+      let key: string | null = null;
+      const patch = (f: (r: PageResult) => PageResult) => {
+        if (!key) return;
+        const k = key;
+        setResults((prev) => (prev[k] ? { ...prev, [k]: f(prev[k]) } : prev));
+      };
+
+      try {
+        await ask(
+          pin ? { question: text, doc: pin.doc, page: pin.page } : { question: text },
+          {
+            onRetrieved: (e) => {
+              key = keyOf(e.doc_sha, e.page);
+              setResults((prev) => ({
+                ...prev,
+                [key!]: { retrieved: e, expected: null, claims: [], done: null },
+              }));
+              setActive(key);
+              // Only a fresh retrieval knows the ranking. A pinned re-ask
+              // carries an empty list, and overwriting with it would discard
+              // the only record of what else was considered.
+              //
+              // The top hit is prepended because the service sends candidates
+              // as hits[1:]. Without it, clicking an alternate is one-way:
+              // there would be no button for the page retrieval actually chose.
+              if (!pin) {
+                setAlternates([
+                  {
+                    doc_sha: e.doc_sha,
+                    page: e.page,
+                    score: e.score ?? 0,
+                    doc_name: e.doc_name,
+                  },
+                  ...e.candidates,
+                ]);
+              }
+            },
+            onClaims: (n) => patch((r) => ({ ...r, expected: n })),
+            // Appended rather than replaced: every claim arrives as its own
+            // event, already verified, and the list grows as they land.
+            onClaim: (c) => patch((r) => ({ ...r, claims: [...r.claims, c] })),
+            onDone: (d) => patch((r) => ({ ...r, done: d })),
+            onError: setError,
           },
-          onClaims: setExpected,
-          // Appended rather than replaced: every claim arrives as its own
-          // event, already verified, and the list grows as they land.
-          onClaim: (c) => setClaims((prev) => [...prev, c]),
-          onDone: setDone,
-          onError: setError,
-        },
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPending(false);
-    }
-  }, []);
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPending(false);
+      }
+    },
+    [results],
+  );
+
+  const currentPage = active ? (results[active] ?? null) : null;
+  const retrieved = currentPage?.retrieved ?? null;
+  const claims = currentPage?.claims ?? [];
+  const expected = currentPage?.expected ?? null;
+  const done = currentPage?.done ?? null;
 
   // The one line that guarantees a withheld claim can never reach the overlay.
   // The service already sends it with regions: [], and this makes the display
@@ -119,6 +171,17 @@ export default function Home() {
   const pageImage = retrieved
     ? `${API}/documents/${retrieved.doc_sha}/pages/${retrieved.page}/image`
     : null;
+  // A pinned re-ask does no retrieval, so its Retrieved event carries score:
+  // null by construction. Reading the score off the ranking instead means the
+  // header shows one for every page, which is what makes two pages comparable:
+  // without it, switching to an alternate silently drops the only number that
+  // says how well it matched.
+  const rankScore =
+    retrieved?.score ??
+    alternates.find(
+      (c) => c.doc_sha === retrieved?.doc_sha && c.page === retrieved?.page,
+    )?.score ??
+    null;
 
   return (
     <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
@@ -346,7 +409,7 @@ export default function Home() {
                     {retrieved.doc_name}
                   </span>
                   <span>page {retrieved.page}</span>
-                  {retrieved.score !== null && <span>score {retrieved.score.toFixed(3)}</span>}
+                  {rankScore !== null && <span>score {rankScore.toFixed(3)}</span>}
                 </div>
 
                 <div className="relative w-full overflow-hidden rounded-md border border-black/10 bg-white dark:border-white/15">
@@ -404,8 +467,14 @@ export default function Home() {
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {alternates.map((cand: Candidate) => {
-                        const current =
+                        const isActive =
                           cand.doc_sha === retrieved.doc_sha && cand.page === retrieved.page;
+                        // A read page comes back instantly and costs nothing;
+                        // an unread one costs a reader call plus a verifier
+                        // call per claim. Worth telling apart before the click
+                        // rather than after it.
+                        const read =
+                          results[keyOf(cand.doc_sha, cand.page)] !== undefined;
                         // Retrieval searches the whole corpus, so a candidate is
                         // often in another document. Labelled only "page 24" it
                         // reads as page 24 of the document on screen, and
@@ -415,26 +484,40 @@ export default function Home() {
                           <button
                             key={`${cand.doc_sha}-${cand.page}`}
                             type="button"
-                            disabled={pending || current}
-                            title={`${cand.doc_name} page ${cand.page}`}
+                            disabled={pending || isActive}
+                            title={`${cand.doc_name} page ${cand.page}${
+                              read ? ", already read" : ", not read yet"
+                            }`}
                             onClick={() =>
                               void run(asked, { doc: cand.doc_sha, page: cand.page })
                             }
-                            className="rounded-full border border-black/15 px-3 py-1 text-xs disabled:opacity-40 hover:border-black/40 dark:border-white/20 dark:hover:border-white/50"
+                            className={`rounded-full border px-3 py-1 text-xs hover:border-black/40 dark:hover:border-white/50 ${
+                              isActive
+                                ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
+                                : read
+                                  ? "border-black/40 dark:border-white/45"
+                                  : "border-dashed border-black/20 dark:border-white/25"
+                            } ${pending && !isActive ? "opacity-40" : ""}`}
                           >
                             {elsewhere && (
-                              <span className="mr-1 text-black/45 dark:text-white/45">
+                              <span className={isActive ? "mr-1 opacity-70" : "mr-1 opacity-60"}>
                                 {cand.doc_name}
                               </span>
                             )}
                             page {cand.page}
-                            <span className="ml-1 text-black/45 dark:text-white/45">
+                            <span className={isActive ? "ml-1 opacity-70" : "ml-1 opacity-60"}>
                               {cand.score.toFixed(3)}
                             </span>
                           </button>
                         );
                       })}
                     </div>
+                    <p className="mt-2 text-xs text-black/45 dark:text-white/45">
+                      Ranked by MaxSim over the page patch embeddings. A solid chip has
+                      already been read and comes back instantly with its own claims and
+                      boxes; a dashed one costs a reader call plus a verifier call per
+                      claim.
+                    </p>
                   </div>
                 )}
               </>
