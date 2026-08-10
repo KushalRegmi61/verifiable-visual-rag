@@ -562,7 +562,7 @@ def test_a_word_starting_with_a_pronoun_is_not_flagged():
 - [ ] **Step 2: Run them to verify they fail**
 
 ```bash
-uv run pytest tests/test_reader.py -k anaphora -v
+uv run pytest tests/test_reader.py -v
 ```
 Expected: FAIL with `ImportError: cannot import name 'opens_with_anaphora'`.
 
@@ -603,19 +603,34 @@ def opens_with_anaphora(claim: str) -> bool:
 - [ ] **Step 4: Run the tests**
 
 ```bash
-uv run pytest tests/test_reader.py -k anaphora -v
+uv run pytest tests/test_reader.py -v
 ```
 Expected: 4 passed.
 
 - [ ] **Step 5: Verify the test discriminates**
 
-Temporarily change `_ANAPHORA.match(claim)` to `_ANAPHORA.search(claim)` and re-run.
+The obvious mutation, `_ANAPHORA.match(claim)` to `_ANAPHORA.search(claim)`, is a
+NO-OP here and will not fail anything. The pattern already begins with `^\s*`,
+and without `re.MULTILINE` an anchored pattern can only match at position 0, so
+`search` and `match` are mathematically identical. That is defence in depth, the
+anchor in the pattern plus the anchored call, and it means the naive mutation
+proves nothing. Measured: 15 passed under it.
+
+Mutate the thing that actually carries the guarantee. Strip `^\s*` from the
+pattern AND use `search`, which reproduces the real bug: "It" matching in the
+middle of "The variant that supports it is Grounded RAG."
 
 ```bash
 find . -name __pycache__ -not -path "./.venv/*" -exec rm -rf {} +
-uv run pytest tests/test_reader.py -k anaphora -v
+uv run pytest tests/test_reader.py -v
 ```
-Expected: `test_a_sentence_merely_containing_a_pronoun_is_not_flagged` FAILS. Revert to `match`, clear caches again, confirm 4 passed. If it does not fail, the test is not discriminating and must be strengthened before you continue.
+Expected: `test_a_sentence_merely_containing_a_pronoun_is_not_flagged` FAILS with
+`assert True is False`. Revert both edits, clear caches again, confirm 15 passed.
+If it does not fail, the test is not discriminating and must be strengthened
+before you continue.
+
+Note the whole file is run rather than `-k anaphora`: none of the four test names
+contains the substring "anaphora", so that selector matches nothing.
 
 - [ ] **Step 6: Commit**
 
