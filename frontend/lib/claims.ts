@@ -1,4 +1,47 @@
 import type { ClaimEvent, ClaimLabel, DoneEvent } from "./api";
+import type { Region } from "./overlay";
+
+/** One page of one document, as RetrievedEvent.pages spells it. */
+export type PageRef = { doc_sha: string; page: number };
+
+/**
+ * The page the viewer should show for a claim.
+ *
+ * The reader sees the top pages of one document and every claim is grounded
+ * against all of them, so a claim's evidence can be on any of them while the
+ * viewer renders exactly one. This resolves the bare page number a region
+ * carries against `pages`, which is the only thing that knows the doc_sha.
+ *
+ * It falls back rather than failing in three cases, all of them real:
+ *
+ * 1. NO REGIONS. A withheld claim ships with `regions: []` by design, and a
+ *    claim whose citation was filtered out has none either. It has no page of
+ *    its own, so the viewer stays where it is. Blanking it instead would read
+ *    as a broken page rather than as "this claim has no evidence", which is
+ *    the opposite of what this product exists to say.
+ *
+ * 2. REGIONS THAT DISAGREE about their page. `_best_region` keeps the best
+ *    region from a single page, so today a claim's regions are always on one
+ *    page and this branch is unreachable. It is handled rather than assumed
+ *    because the alternative, taking `regions[0].page`, would silently show
+ *    one page as THE page for evidence that was spread over several, which is
+ *    a lie the user has no way to detect. Falling back leaves the viewer put,
+ *    exactly as for a claim with no evidence at all.
+ *
+ * 3. A PAGE THE READER NEVER SAW. Defensive: without `pages` there is no
+ *    doc_sha for it, and guessing the doc_sha of the page on screen would
+ *    build an image URL for a page of the wrong document that still loads.
+ */
+export function pageForClaim(
+  claim: { regions: Pick<Region, "page">[] },
+  pages: PageRef[],
+  fallback: PageRef,
+): PageRef {
+  const distinct = new Set(claim.regions.map((r) => r.page));
+  if (distinct.size !== 1) return fallback;
+  const [page] = [...distinct];
+  return pages.find((p) => p.page === page) ?? fallback;
+}
 
 /**
  * Explicit hex rather than Tailwind classes. The colour is chosen at runtime

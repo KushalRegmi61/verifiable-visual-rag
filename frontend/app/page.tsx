@@ -9,7 +9,7 @@ import {
   type DoneEvent,
   type RetrievedEvent,
 } from "@/lib/api";
-import { isAbstaining } from "@/lib/claims";
+import { isAbstaining, pageForClaim, type PageRef } from "@/lib/claims";
 import type { Region } from "@/lib/overlay";
 import { AnswerPanel } from "@/components/AnswerPanel";
 import { EvidenceVault } from "@/components/EvidenceVault";
@@ -31,6 +31,18 @@ type Zoom = { claim: ClaimEvent; region: Region };
 
 function keyOf(docSha: string, page: number): string {
   return `${docSha}:${page}`;
+}
+
+function imageFor(ref: PageRef): string {
+  return `${API}/documents/${ref.doc_sha}/pages/${ref.page}/image`;
+}
+
+/** The page a retrieval opens on: the top of the list the reader was given. */
+function topPageOf(e: RetrievedEvent): PageRef {
+  // pages[0] is the top page, guaranteed server-side. The fallback is for a
+  // response that carries no list at all rather than a wrong one, so that a
+  // missing field costs the multi-page behaviour and not the viewer.
+  return e.pages[0] ?? { doc_sha: e.doc_sha, page: e.page };
 }
 
 export default function Home() {
@@ -57,6 +69,12 @@ export default function Home() {
   const [hovered, setHovered] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [zoom, setZoom] = useState<Zoom | null>(null);
+  // Which of the pages the reader saw is in the viewer. Separate from `active`,
+  // which is the page that was READ and keys the result cache: one reader call
+  // covers three page images, so the answer belongs to the set while the viewer
+  // shows one of them at a time. Null until the retrieved frame names a top
+  // page.
+  const [viewing, setViewing] = useState<PageRef | null>(null);
   // Measured from the rendered page image rather than assumed. Reset on a page
   // change so a landscape page cannot be cropped using the ratio of the
   // portrait one before it, which would distort every crop until the new image
@@ -76,6 +94,9 @@ export default function Home() {
         setHovered(null);
         setExpanded(null);
         setPageAspect(null);
+        // Back to the top of the cached read's own page list, not to whatever
+        // page the last claim hovered before leaving happened to be on.
+        setViewing(topPageOf(results[keyOf(pin.doc, pin.page)].retrieved));
         return;
       }
 
@@ -86,6 +107,7 @@ export default function Home() {
       setExpanded(null);
       setZoom(null);
       setActive(null);
+      setViewing(null);
       setPageAspect(null);
       // Both the cache and the ranking belong to the question rather than to
       // the page on screen, so a new question drops both and a pinned re-ask
@@ -116,6 +138,7 @@ export default function Home() {
                 [key!]: { retrieved: e, expected: null, claims: [], done: null },
               }));
               setActive(key);
+              setViewing(topPageOf(e));
               // Only a fresh retrieval knows the ranking. A pinned re-ask
               // carries an empty list, and overwriting with it would discard
               // the only record of what else was considered.
@@ -170,6 +193,27 @@ export default function Home() {
   const imageUrl = retrieved
     ? `${API}/documents/${retrieved.doc_sha}/pages/${retrieved.page}/image`
     : null;
+  // Every page the reader saw, and the one currently in the viewer. `viewing`
+  // is set from the same frame as `retrieved`, so falling back to the top page
+  // here covers the render between the two rather than a missing value.
+  const pages = retrieved?.pages ?? [];
+  const viewingRef = viewing ?? (retrieved ? topPageOf(retrieved) : null);
+  const viewerUrl = viewingRef ? imageFor(viewingRef) : null;
+  // True only while the viewer is on the page retrieval actually ranked. The
+  // score is a property of that page, and leaving it on the header while
+  // showing page 9 would attach page 4's number to page 9.
+  const onRankedPage =
+    viewingRef !== null &&
+    viewingRef.doc_sha === retrieved?.doc_sha &&
+    viewingRef.page === retrieved?.page;
+  // A zoom crops the page ITS REGION is on, which is not always the page in the
+  // viewer: the evidence vault can open a region belonging to another of the
+  // pages the reader saw. Cropping the displayed page at those coordinates
+  // would magnify unrelated text and caption it as the evidence.
+  const zoomRef =
+    zoom && viewingRef
+      ? pageForClaim({ regions: [zoom.region] }, pages, viewingRef)
+      : null;
   // A pinned re-ask does no retrieval, so its Retrieved event carries score:
   // null by construction. Reading the score off the ranking instead means the
   // header shows one for every page, which is what makes two pages comparable:
@@ -182,17 +226,56 @@ export default function Home() {
     )?.score ??
     null;
 
+  // The viewer follows the claim. Its evidence can be on any of the pages the
+  // reader saw, and boxes are drawn only for the page on screen, so without
+  // this a claim grounded on page 9 highlights nothing at all while page 4 is
+  // displayed.
+  //
+  // `viewingRef` is the fallback, not the top page: a claim with no regions
+  // must leave the viewer exactly where it is. Sending it home to the top page
+  // would make hovering a withheld sentence yank the image away from the page
+  // the user was reading.
+  //
+  // Plain functions rather than useCallback, unlike `run` above. They close
+  // over `claims`, `pages` and `viewingRef`, which are derived from state on
+  // every render, so a manual dependency list would be a new array every time
+  // and buy nothing; the React Compiler rejects it outright with "existing
+  // memoization could not be preserved" and then skips optimizing the whole
+  // component, which costs more than the hook saves.
+  const followClaim = (index: number) => {
+    if (!viewingRef) return;
+    const claim = claims.find((c) => c.index === index);
+    if (!claim) return;
+    const next = pageForClaim(claim, pages, viewingRef);
+    // Same page, same object. Every box on screen calls this on mouse-enter,
+    // and a fresh object each time would re-render the whole column for a
+    // move that did not happen.
+    setViewing((prev) =>
+      prev && prev.doc_sha === next.doc_sha && prev.page === next.page ? prev : next,
+    );
+  };
+
+  const hoverClaim = (index: number | null) => {
+    setHovered(index);
+    // Mouse-out deliberately does NOT return to the previous page. Snapping
+    // back the instant the pointer leaves a sentence makes the viewer flick
+    // between scans as the user reads down the answer, and nothing stays on
+    // screen long enough to be read.
+    if (index !== null) followClaim(index);
+  };
+
   // Clicking a sentence in the answer opens its evidence and brings it into
   // view. Without the scroll the disclosure opens somewhere below the fold and
   // the click reads as having done nothing.
-  const revealClaim = useCallback((index: number) => {
+  const revealClaim = (index: number) => {
     setExpanded((prev) => (prev === index ? null : index));
+    followClaim(index);
     requestAnimationFrame(() => {
       document
         .getElementById(`claim-${index}`)
         ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
-  }, []);
+  };
 
   // `!done` as well as `pending`, because `pending` is cleared in run's
   // `finally`, one or more ticks after onDone lands. Without it there is a
@@ -333,7 +416,7 @@ export default function Home() {
                   done={done}
                   withheldCount={withheld.length}
                   hovered={hovered}
-                  onHover={setHovered}
+                  onHover={hoverClaim}
                   onSelect={revealClaim}
                 />
               )}
@@ -349,7 +432,7 @@ export default function Home() {
                 expanded={expanded}
                 hovered={hovered}
                 onToggle={revealClaim}
-                onHover={setHovered}
+                onHover={hoverClaim}
                 onZoom={(claim, region) => setZoom({ claim, region })}
                 pageAspect={pageAspect}
               />
@@ -366,15 +449,16 @@ export default function Home() {
                 vault scrolls beside it. The two are meant to be read against
                 each other, and a viewer that scrolls away breaks that. */}
             <div className="min-w-0 lg:sticky lg:top-[5.5rem] lg:self-start">
-              {retrieved && imageUrl ? (
+              {retrieved && viewingRef && viewerUrl ? (
                 <>
                   <PageViewer
                     retrieved={retrieved}
-                    imageUrl={imageUrl}
-                    score={rankScore}
+                    imageUrl={viewerUrl}
+                    page={viewingRef.page}
+                    score={onRankedPage ? rankScore : null}
                     shown={shown}
                     hovered={hovered}
-                    onHover={setHovered}
+                    onHover={hoverClaim}
                     onZoom={(claim, region) => setZoom({ claim, region })}
                     onMeasure={setPageAspect}
                   />
@@ -399,13 +483,13 @@ export default function Home() {
         )}
       </main>
 
-      {zoom && retrieved && imageUrl && (
+      {zoom && retrieved && zoomRef && (
         <ZoomOverlay
-          imageUrl={imageUrl}
+          imageUrl={imageFor(zoomRef)}
           claim={zoom.claim}
           region={zoom.region}
           docName={retrieved.doc_name}
-          page={retrieved.page}
+          page={zoomRef.page}
           pageAspect={pageAspect}
           onClose={() => setZoom(null)}
         />

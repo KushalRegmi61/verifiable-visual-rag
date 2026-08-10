@@ -8,6 +8,15 @@ import { PageIcon } from "./icons";
 type Props = {
   retrieved: RetrievedEvent;
   imageUrl: string;
+  /**
+   * The page this image is of, which is not always `retrieved.page`: the
+   * viewer follows the hovered or selected claim to whichever of the pages the
+   * reader saw its evidence is on. Passed in rather than derived, because the
+   * component draws only the regions belonging to it and the decision of which
+   * page that is lives in `lib/claims` where it can be tested.
+   */
+  page: number;
+  /** Null unless the page on screen is the one retrieval ranked. */
   score: number | null;
   shown: ClaimEvent[];
   hovered: number | null;
@@ -36,6 +45,7 @@ type Props = {
 export function PageViewer({
   retrieved,
   imageUrl,
+  page,
   score,
   shown,
   hovered,
@@ -50,7 +60,11 @@ export function PageViewer({
           <PageIcon className="h-3.5 w-3.5 text-faint" />
           {retrieved.doc_name}
         </span>
-        <span className="text-muted tnum">page {retrieved.page}</span>
+        {/* `page`, not `retrieved.page`. Following a claim to another page
+            while the header still names the retrieved one would caption the
+            image with the wrong page number, which is worse than not
+            captioning it: the caption is what a reader would quote. */}
+        <span className="text-muted tnum">page {page}</span>
         {score !== null && (
           <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent tnum">
             {score.toFixed(3)}
@@ -73,34 +87,42 @@ export function PageViewer({
             }}
             className="block max-h-[calc(100vh-14rem)] w-auto max-w-full rounded-lg shadow-sm"
           />
+          {/* Only the regions of the page actually on screen. A claim grounded
+              on another of the pages the reader saw carries that page's
+              coordinates, and drawing them here would put a box over unrelated
+              text at the same position, which is a fabricated citation rather
+              than a misplaced one. */}
           {shown.flatMap((c) =>
-            c.regions.map((r, i) => {
-              const colour = colourFor(c.index);
-              const dimmed = hovered !== null && hovered !== c.index;
-              return (
-                <button
-                  key={`${c.index}-${i}`}
-                  type="button"
-                  onClick={() => onZoom(c, r)}
-                  onMouseEnter={() => onHover(c.index)}
-                  onMouseLeave={() => onHover(null)}
-                  aria-label={`Claim ${c.index + 1}: ${c.text}. Open zoomed evidence.`}
-                  style={{
-                    ...toStyle(r.bbox),
-                    position: "absolute",
-                    borderColor: colour,
-                    backgroundColor: `${colour}${dimmed ? "10" : "26"}`,
-                    // Dashed means the region stayed at block level, so the
-                    // heatmap could not separate the lines inside it. A confident
-                    // line hit and a coarse fallback must not look the same.
-                    borderStyle: r.resolution === "block" ? "dashed" : "solid",
-                    borderWidth: 2,
-                    opacity: dimmed ? 0.3 : 1,
-                  }}
-                  className="cursor-pointer rounded-[2px] transition-all duration-150 hover:shadow-[0_0_0_3px_rgba(0,0,0,0.08)]"
-                />
-              );
-            }),
+            c.regions
+              .filter((r) => r.page === page)
+              .map((r, i) => {
+                const colour = colourFor(c.index);
+                const dimmed = hovered !== null && hovered !== c.index;
+                return (
+                  <button
+                    key={`${c.index}-${r.page}-${i}`}
+                    type="button"
+                    onClick={() => onZoom(c, r)}
+                    onMouseEnter={() => onHover(c.index)}
+                    onMouseLeave={() => onHover(null)}
+                    aria-label={`Claim ${c.index + 1}: ${c.text}. Open zoomed evidence.`}
+                    style={{
+                      ...toStyle(r.bbox),
+                      position: "absolute",
+                      borderColor: colour,
+                      backgroundColor: `${colour}${dimmed ? "10" : "26"}`,
+                      // Dashed means the region stayed at block level, so the
+                      // heatmap could not separate the lines inside it. A
+                      // confident line hit and a coarse fallback must not look
+                      // the same.
+                      borderStyle: r.resolution === "block" ? "dashed" : "solid",
+                      borderWidth: 2,
+                      opacity: dimmed ? 0.3 : 1,
+                    }}
+                    className="cursor-pointer rounded-[2px] transition-all duration-150 hover:shadow-[0_0_0_3px_rgba(0,0,0,0.08)]"
+                  />
+                );
+              }),
           )}
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { groupIntoParagraphs, isAbstaining } from "./claims";
+import { groupIntoParagraphs, isAbstaining, pageForClaim, type PageRef } from "./claims";
 import type { ClaimEvent, DoneEvent } from "./api";
+import type { Region } from "./overlay";
 
 function claim(index: number, starts_paragraph = false): ClaimEvent {
   return {
@@ -87,6 +88,76 @@ describe("groupIntoParagraphs", () => {
 
   it("returns nothing for an empty answer", () => {
     expect(groupIntoParagraphs([])).toEqual([]);
+  });
+});
+
+describe("pageForClaim", () => {
+  const DOC = "a".repeat(64);
+  // As the wire sends it: retrieval order, pages[0] the top page.
+  const PAGES: PageRef[] = [
+    { doc_sha: DOC, page: 4 },
+    { doc_sha: DOC, page: 9 },
+    { doc_sha: DOC, page: 2 },
+  ];
+  const TOP = PAGES[0];
+
+  function region(page: number): Region {
+    return {
+      page,
+      bbox: [0.1, 0.2, 0.5, 0.24],
+      score: 12.5,
+      modality: "visual",
+      resolution: "line",
+      text: null,
+    };
+  }
+
+  function grounded(...pages: number[]): { regions: Region[] } {
+    return { regions: pages.map(region) };
+  }
+
+  it("follows a claim to the page its evidence is on", () => {
+    // The whole point: the evidence for this sentence is not on the page that
+    // was retrieved, and the viewer has to move to it or the boxes it draws
+    // belong to a page nobody is looking at.
+    expect(pageForClaim(grounded(9), PAGES, TOP)).toEqual({ doc_sha: DOC, page: 9 });
+  });
+
+  it("stays on the page shown when the claim has no regions", () => {
+    // THE test. A withheld claim ships with regions: [] by design, and so does
+    // a claim whose citation was filtered out. Returning anything page-shaped
+    // but empty here blanks the viewer, which reads as a broken page rather
+    // than as "this claim has no evidence".
+    const shown: PageRef = { doc_sha: DOC, page: 2 };
+    expect(pageForClaim(grounded(), PAGES, shown)).toBe(shown);
+  });
+
+  it("stays on the page shown when the regions disagree about their page", () => {
+    // Unreachable today: _best_region keeps the best region of one page, so a
+    // claim's regions are always on one page. Pinned anyway because the
+    // tempting implementation, regions[0].page, would answer 4 here and
+    // present one page as THE page for evidence spread over two, with nothing
+    // on screen to say otherwise.
+    const shown: PageRef = { doc_sha: DOC, page: 4 };
+    expect(pageForClaim(grounded(4, 9), PAGES, shown)).toBe(shown);
+  });
+
+  it("treats several regions on one page as that page", () => {
+    // The disagreement guard must not catch the ordinary multi-region claim.
+    expect(pageForClaim(grounded(9, 9, 9), PAGES, TOP)).toEqual({ doc_sha: DOC, page: 9 });
+  });
+
+  it("stays on the page shown when the claim's page was never retrieved", () => {
+    // Defensive. `pages` is the only thing that knows a page's doc_sha, so
+    // without an entry there is no honest URL to build; assuming the doc on
+    // screen would fetch a real image of the wrong document's page 11.
+    expect(pageForClaim(grounded(11), PAGES, TOP)).toBe(TOP);
+  });
+
+  it("does not assume the claim's page is the top one", () => {
+    // Guards against returning pages[0] instead of the matching entry, which
+    // passes every test above whose claim happens to sit on the top page.
+    expect(pageForClaim(grounded(2), PAGES, TOP).page).toBe(2);
   });
 });
 

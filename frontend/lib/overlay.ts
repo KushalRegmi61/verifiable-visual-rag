@@ -6,6 +6,12 @@
 export type BBox = [number, number, number, number];
 
 export type Region = {
+  // Which page this region is on. The reader now sees several pages of one
+  // document and every claim is grounded against all of them, so a claim's
+  // evidence is not necessarily on the page that was retrieved. There is no
+  // doc_sha here because grounding never crosses documents; the page number is
+  // resolved against RetrievedEvent.pages, which carries both.
+  page: number;
   bbox: BBox;
   score: number;
   modality: "visual" | "text";
