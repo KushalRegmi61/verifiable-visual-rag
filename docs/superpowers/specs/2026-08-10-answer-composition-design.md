@@ -459,6 +459,39 @@ Live, marked slow, verifier:
 | `frontend/components/AnswerPanel.tsx` | paragraph breaks, partial-state line |
 | `frontend/app/page.tsx` | the three states and their copy |
 
+## 12.1 Follow-up landed 2026-08-10: the citation filter
+
+The slice surfaced a grounding defect it did not cause. The visual path
+returned the page number, `[0.526 0.940 0.535 0.953]`, an 11 by 22 px box
+holding the digit 8, as the evidence for three claims across two unrelated
+questions. The verifier scored two of them `supported` at 0.90 and 0.95,
+because the rubric asks whether the CLAIM is true and the claims were true.
+
+Fixed in three parts, because the first alone made things worse:
+
+1. `shares_a_term(claim, region_text)` in `reader.py` drops a region whose text
+   names nothing the claim names. Deliberately NOT `shares_content_word`, whose
+   pattern excludes bare numbers so they cannot chain sentences; reusing it
+   would have scored every numeric region as fabricated.
+2. Applied in `agent/core.py` between `ground()` and `verify()`. Not inside
+   `ground()`, whose contract says an empty list means no evidence exists and
+   whose behaviour S7's ablation measures.
+3. `abstained=score < threshold or not regions`, because the verifier obeys the
+   "no regions means insufficient_evidence" instruction inconsistently: one
+   region-less claim returned `insufficient_evidence` at 1.00 and another
+   `supported` at 0.90 in the same answer. Without part 3, part 1 trades a
+   fabricated citation for a sentence shown with no evidence at all.
+
+**Consequence for section 5, rule 1.** The lead claim is asked to answer the
+question directly, which makes it the most synthesised sentence and therefore
+the least likely to be findable verbatim. It falls through to the visual path,
+which is where the sink lives. Measured after the fix on two questions against
+page 14, the lead was withheld both times and the lead rule abstained the whole
+answer both times, while later and more literal claims grounded normally. Rule
+1 and grounding pull against each other in the same way rule 1 and rule 2 do,
+and S7 should expect a lead-specific abstention effect rather than a uniform
+one.
+
 ## 13. Non-goals
 
 - **A composer model.** Rejected during design. A third call that rewrites
