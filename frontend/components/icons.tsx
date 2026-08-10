@@ -82,6 +82,15 @@ export function ChevronIcon({ className = "h-4 w-4" }: Props) {
   );
 }
 
+export function SendIcon({ className = "h-4 w-4" }: Props) {
+  return (
+    <svg {...BASE} className={className}>
+      <path d="M12 19V5" />
+      <path d="m5.5 11.5 6.5-6.5 6.5 6.5" />
+    </svg>
+  );
+}
+
 export function PageIcon({ className = "h-4 w-4" }: Props) {
   return (
     <svg {...BASE} className={className}>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
-import { SearchIcon } from "./icons";
+import { SearchIcon, SendIcon } from "./icons";
 
 // About seven lines. Past that the composer stops growing and scrolls, because
 // a header that keeps expanding eventually covers the answer it sits above, and
@@ -47,8 +47,8 @@ export function AskComposer({ value, onChange, onSubmit, pending }: Props) {
 
     fit();
     // The height is a function of the WIDTH as well as the text, and the width
-    // changes without the text changing: the button wraps to its own row below
-    // 640px, so the field roughly doubles in width crossing that breakpoint.
+    // changes without the text changing: the window resizes, and the button
+    // itself switches between a 44px square and a wider labelled one at 640px.
     // Without this the inline height survives the resize and a one-line
     // question sits in a two-line box. Found by resizing the window, not by a
     // test. A ResizeObserver on the field itself would be the obvious tool and
@@ -83,16 +83,16 @@ export function AskComposer({ value, onChange, onSubmit, pending }: Props) {
       <label htmlFor="question" className="sr-only">
         Question
       </label>
-      {/* items-end so the button stays on the last line as the box grows, which
-          is where the caret is. The button wraps onto its own row below 640px:
-          sharing the row there
-          leaves the field about 180px wide on a 375px screen, which is too
-          narrow to reread a sentence-length question in. */}
-      <div className="flex flex-wrap items-end gap-x-2 gap-y-1 rounded-[22px] border border-border bg-surface px-3 py-1.5 transition-colors duration-150 focus-within:border-accent">
-        {/* Pinned to the first line, not the last. It labels the field, and
-            riding the bottom edge as the box grows makes it read as belonging
-            to whichever line happens to be last. */}
-        <SearchIcon className="mt-2.5 h-4 w-4 shrink-0 self-start text-faint" />
+      {/* items-start, so nothing here moves as the field grows. Pinning the
+          button to the LAST line meant it slid down the screen while the user
+          was still typing the question it submits, which reads as the layout
+          coming apart rather than as the field doing its job. The icon and the
+          button now frame the first line and stay there; only the text moves.
+          One row at every width, so growth never reflows the row either. */}
+      <div className="flex items-start gap-2 rounded-[22px] border border-border bg-surface px-3 py-1.5 transition-colors duration-150 focus-within:border-accent">
+        {/* mt-2.5 puts it on the optical centre of the first line rather than
+            the top of the padding box. */}
+        <SearchIcon className="mt-2.5 h-4 w-4 shrink-0 text-faint" />
         <textarea
           id="question"
           ref={ref}
@@ -106,14 +106,21 @@ export function AskComposer({ value, onChange, onSubmit, pending }: Props) {
           autoComplete="off"
           // resize-none because the drag handle would fight the auto-growth,
           // and leading-6 so the measured height lands on whole lines.
-          className="max-h-[168px] min-h-[28px] flex-1 basis-[calc(100%-1.5rem)] resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-faint disabled:opacity-60 sm:basis-0"
+          className="max-h-[168px] min-h-[28px] flex-1 resize-none bg-transparent py-1 text-sm leading-6 outline-none placeholder:text-faint disabled:opacity-60"
         />
+        {/* Icon-only below 640px. Spelling out "Ask" there costs about 50px
+            of a 375px screen and left the field too narrow to reread a
+            sentence in, which is what made the button wrap onto its own row
+            before, which is what made it move. 44px square on touch, per the
+            minimum target size. */}
         <button
           type="submit"
           disabled={pending || !value.trim()}
-          className="mb-0.5 ml-auto h-9 shrink-0 cursor-pointer rounded-full bg-accent px-5 text-sm font-medium text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-default disabled:opacity-40"
+          aria-label={pending ? "Working" : "Ask"}
+          className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent text-sm font-medium text-white transition-opacity duration-150 hover:opacity-90 disabled:cursor-default disabled:opacity-40 sm:h-9 sm:w-auto sm:px-5"
         >
-          {pending ? "Working" : "Ask"}
+          <SendIcon className="h-4 w-4 sm:hidden" />
+          <span className="hidden sm:inline">{pending ? "Working" : "Ask"}</span>
         </button>
       </div>
       <p id="question-hint" className="sr-only">
