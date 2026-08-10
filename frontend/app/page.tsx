@@ -370,9 +370,20 @@ export default function Home() {
                         does not contain would be a claim with no region behind
                         it, which is precisely what the rest of the system
                         exists to refuse. */}
-                    I read {retrieved?.doc_name} page {retrieved?.page}, but I was not able
-                    to confirm an answer to your question from what is on it. Rather than
-                    give you something I cannot stand behind, I have left it out.
+                    {/* Names every page the reader saw, not just the one retrieval
+                        ranked first. Saying "page 19" when three pages were read
+                        understates what was checked, and a reader who knows the
+                        answer is on page 14 would reasonably conclude the system
+                        never looked. The list comes from the server, so it cannot
+                        drift from what was actually read. */}
+                    I read {retrieved?.doc_name}{" "}
+                    {retrieved && retrieved.pages.length > 1
+                      ? `pages ${retrieved.pages.map((p) => p.page).join(", ")}`
+                      : `page ${retrieved?.page}`}
+                    , but I was not able to confirm an answer to your question from what
+                    is on {retrieved && retrieved.pages.length > 1 ? "them" : "it"}.
+                    Rather than give you something I cannot stand behind, I have left it
+                    out.
                     {/* Without this, an unembedded page reads as a judgement about
                         the evidence when the real cause is that nobody ran
                         `vvrag embed`. */}
