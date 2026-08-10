@@ -46,6 +46,13 @@ export type RetrievedEvent = {
   doc_name: string;
   page: number;
   score: number | null;
+  // Every page the reader saw, in retrieval order. A claim's region carries
+  // only a page number, no doc_sha, so this is what lets the viewer build an
+  // image URL for a claim grounded away from the page on screen. Non-optional,
+  // like starts_paragraph and abstains_answer: the wire always sends it, and
+  // an optional field would let a later fixture omit it and exercise
+  // undefined behaviour the server can never produce.
+  pages: { doc_sha: string; page: number }[];
   candidates: Candidate[];
   // Sent before any model call. Currently only "this page is not embedded",
   // which otherwise surfaces as every claim coming back insufficient_evidence

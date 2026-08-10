@@ -161,6 +161,63 @@ def test_a_retrieved_event_names_the_page_and_the_alternatives():
     ]
 
 
+def test_a_retrieved_event_lists_every_page_the_reader_saw_in_order():
+    """Page numbers are deliberately NOT ascending (3, 19, 1), so a sort
+    anywhere in the path would still pass an ascending-only fixture. This
+    project has hit an ordering test blind to a sort three times already."""
+    from pathlib import Path
+
+    from visual_verify.api.ask import Retrieved
+    from visual_verify.prepare import PreparedPage
+
+    def page(page_no):
+        return PreparedPage(
+            doc_sha="abc123",
+            doc_name="proposal.pdf",
+            page_no=page_no,
+            image_path=Path(f"p{page_no}.png"),
+            boxes=[],
+            page_vectors=None,
+            grid=None,
+        )
+
+    top = page(3)
+    others = [page(19), page(1)]
+
+    _, payload = to_frame(
+        Retrieved(page=top, score=9.4, pages=[top, *others])
+    )
+
+    assert payload["pages"] == [
+        {"doc_sha": "abc123", "page": 3},
+        {"doc_sha": "abc123", "page": 19},
+        {"doc_sha": "abc123", "page": 1},
+    ]
+
+
+def test_a_retrieved_event_without_explicit_pages_names_only_the_page_on_screen():
+    """Retrieved.__post_init__ supplies pages=[page] when the caller passes
+    none. The wire frame must reflect that default, not an empty list."""
+    from pathlib import Path
+
+    from visual_verify.api.ask import Retrieved
+    from visual_verify.prepare import PreparedPage
+
+    prepared = PreparedPage(
+        doc_sha="abc123",
+        doc_name="proposal.pdf",
+        page_no=3,
+        image_path=Path("p.png"),
+        boxes=[],
+        page_vectors=None,
+        grid=None,
+    )
+
+    _, payload = to_frame(Retrieved(page=prepared, score=9.4))
+
+    assert payload["pages"] == [{"doc_sha": "abc123", "page": 3}]
+
+
 def test_a_candidate_with_no_name_falls_back_to_a_short_sha():
     """to_frame must not raise on a sha the lookup missed. A KeyError here would
     kill the stream after the 200 was committed, turning a cosmetic gap into a

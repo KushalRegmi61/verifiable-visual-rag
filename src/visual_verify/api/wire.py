@@ -85,6 +85,14 @@ def to_frame(event) -> tuple[str, dict]:
             "doc_name": event.page.doc_name,
             "page": event.page.page_no,
             "score": event.score,
+            # Every page the reader actually saw, in retrieval order. A claim's
+            # GroundedRegion carries only an int page, no doc_sha; this list is
+            # what lets the frontend turn that int into an image URL for a page
+            # other than the one on screen. Not per-claim: the claim frame would
+            # then carry a second spelling of a fact this list already states.
+            "pages": [
+                {"doc_sha": p.doc_sha, "page": p.page_no} for p in event.pages
+            ],
             "candidates": [
                 {
                     "doc_sha": c.doc_id,
