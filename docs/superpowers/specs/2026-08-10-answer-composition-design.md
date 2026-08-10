@@ -1,7 +1,7 @@
 # Answer composition: prose that survives the gate
 
 Date: 2026-08-10
-Status: design approved, not implemented
+Status: implemented 2026-08-10, branch s6.1-answer-composition
 Depends on: S4 (grounding), S5 (reader, verifier, abstention), S6 (product UI)
 
 ## 1. What this changes
@@ -340,9 +340,32 @@ consistent with a lenient judge. Nothing currently distinguishes the two, and
 if it is the second then the lead rule never fires and the abstain copy is never
 seen.
 
-**The strictness probe runs before any prompt tuning.** It feeds the verifier
-real regions from a real page with claims that are false in four specific ways,
-and asserts none is labelled `supported`:
+**Measured 2026-08-10: the verifier can reject, and the prompt was not changed.**
+All four probes plus a control passed against the existing prompt, with
+`openai:gpt-4o` as the verifier. So the 30 of 32 figure above was an easy
+corpus, not a rubber stamp. Labels returned, against a region reading
+"Evaluation on SlideVQA with three metrics":
+
+| probe | label | confidence |
+|---|---|---|
+| control, "uses SlideVQA" | `supported` | 0.95 |
+| changed number, "seven metrics" | `unsupported` | 1.00 |
+| swapped entity, "runs on DocVQA" | `unsupported` | 0.95 |
+| absent content, "conformal calibration" | `insufficient_evidence` | 0.90 |
+| true of page, absent from regions | `partially_supported` | 0.80 |
+
+The last row is the one that mattered, and its reason sentence is the evidence:
+"the evidence mentions evaluation with three metrics but does not specify exact
+match and F1". The verifier declined to import a fact printed on the image
+because the region it was handed did not establish it.
+
+It is withheld structurally rather than by luck. `partially_supported` at 0.80
+scores 4.8 against a threshold of 6.0, and `_BAND = 2` keeps every
+`partially_supported` claim below the supported floor even at confidence 1.0.
+
+**The probe runs before any prompt tuning.** It feeds the verifier real regions
+from a real page with claims that are false in four specific ways, and asserts
+none is labelled `supported`:
 
 1. **A changed number.** "The evaluation reports seven metrics" against a region
    establishing three.
