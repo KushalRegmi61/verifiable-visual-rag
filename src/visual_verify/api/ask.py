@@ -60,9 +60,12 @@ from visual_verify.store.models import Document
 DEFAULT_K = 5
 # How many pages of the top hit's document are prepared and read. Smaller than
 # DEFAULT_K on purpose: retrieval ranks k pages so there is something to choose
-# between, but each prepared page costs four queries (a Page select, a Box
-# select, then get_payload_or_none and get_vectors against Qdrant), and the
-# pages past the third rarely support a claim.
+# between, but each prepared page costs about four queries, and the pages past
+# the third rarely support a claim. The exact count varies: five for the first
+# page of a document, because resolve_document's session.get is a real query;
+# four for the second and third, because the identity map serves the same
+# Document without a round trip; three for a page with no payload, because
+# get_vectors sits inside the `if`.
 DEFAULT_PAGES = 3
 
 

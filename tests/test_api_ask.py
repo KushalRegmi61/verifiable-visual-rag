@@ -310,6 +310,13 @@ def two_indexed(tmp_path, monkeypatch, multipage_pdf):
     same reason multipage_pdf has three: when it was one page, a run where it
     won left `pages` with a single entry and no page 1 to pin, and the file
     failed roughly half the time while prepare_pages was entirely correct.
+
+    This also bounds how many pages the LOSING document keeps. Six pages are
+    indexed total (3 + 3) against DEFAULT_K = 5, so index.search returns 5 of
+    the 6 and the loser drops at most one page, leaving each document at least
+    2 pages in `hits` no matter which one wins; that is what makes
+    `len(pages) > 1` hold on both branches below. Add a third document to this
+    fixture, or drop k to 2, and it stops holding.
     """
     import fitz
 
@@ -356,8 +363,10 @@ def test_the_top_page_is_still_the_first_prepared_page(two_indexed):
 
 
 def test_no_more_than_the_page_limit_is_prepared(two_indexed):
-    """k is 5 and DEFAULT_PAGES is 3. Every prepared page is four queries: a
-    Page select, a Box select, then get_payload_or_none and get_vectors."""
+    """k is 5 and DEFAULT_PAGES is 3. Every prepared page is about four
+    queries: a Page select, a Box select, then get_payload_or_none and
+    get_vectors, plus resolve_document's Document lookup, which is a real
+    query only for the first page (later ones hit the identity map)."""
     from visual_verify.api.ask import DEFAULT_PAGES
 
     retrieved = run(two_indexed, AskRequest(question="What happened?", k=5))[0]

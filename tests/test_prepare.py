@@ -147,9 +147,11 @@ def test_retrieval_order_survives_rather_than_page_order(two_documents):
 
 
 def test_the_limit_caps_how_many_pages_are_prepared(two_documents):
-    """Every prepared page costs four queries: a Page select, a Box select, then
-    get_payload_or_none and get_vectors against Qdrant. The filter runs first,
-    so the cap counts pages that survived it, not raw hits."""
+    """Every prepared page costs about four queries: a Page select, a Box
+    select, then get_payload_or_none and get_vectors against Qdrant, plus a
+    Document lookup that is a real query on the first page and served from the
+    identity map on the rest. The filter runs first, so the cap counts pages
+    that survived it, not raw hits."""
     settings, index, session, sha_a, sha_b = two_documents
     hits = [
         _hit(sha_a, 0, 9.0),
