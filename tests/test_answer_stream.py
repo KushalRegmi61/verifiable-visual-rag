@@ -696,3 +696,58 @@ def test_two_text_hits_break_the_tie_by_retrieval_order_not_page_number():
     # The verifier follows the winner. A sort would send it p2.png, and it
     # would judge a page-7 box against page 2's image without complaining.
     assert verifier.calls[0].image_paths == [Path("p7.png")]
+
+
+def test_a_single_character_region_is_not_cited_to_the_verifier():
+    """Pins WHERE the degeneracy check runs, not just that it exists.
+
+    The claim names "8" and so does the region, so `shares_a_term` passes it:
+    this is the numeric coincidence the term check structurally cannot catch. A
+    unit test of the predicate alone would not notice if the filter were never
+    wired into the loop.
+    """
+    import numpy as np
+
+    from visual_verify.agent import answer
+    from visual_verify.agent.verifier import NO_EVIDENCE
+    from visual_verify.ingest.boxes import BoxRecord
+    from visual_verify.retrieval.geometry import PatchGrid
+
+    page_number = [
+        BoxRecord(
+            kind="word",
+            x0=0.526,
+            y0=0.940,
+            x1=0.535,
+            y1=0.953,
+            text="8",
+            block_no=0,
+            line_no=0,
+            word_no=0,
+        )
+    ]
+    reader = FakeChat("r", [claim_list("Figure 8 shows the overall pipeline")])
+    verifier = FakeChat(
+        "v", [Verdict(label="supported", confidence=1.0, reason="looks fine to me")]
+    )
+
+    out = answer(
+        "q",
+        [
+            prepared(
+                page_number,
+                page=0,
+                image="page0.png",
+                vectors=np.ones((16, 8), dtype=np.float32),
+                grid=PatchGrid(n_x=4, n_y=4, offset=0, n_vectors=16),
+            )
+        ],
+        reader_chat=reader,
+        verifier_chat=verifier,
+        threshold=0.0,
+        embed_query=lambda _: np.ones((2, 8), dtype=np.float32),
+    )
+
+    assert NO_EVIDENCE in verifier.calls[0].prompt
+    assert out.claims[0].regions == []
+    assert out.claims[0].withheld is True

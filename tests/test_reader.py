@@ -414,3 +414,46 @@ def test_an_unknown_region_text_is_not_judged():
 
     assert shares_a_term("Any claim at all.", None) is True
     assert shares_a_term("Any claim at all.", "   ") is True
+
+
+def test_a_single_character_region_cannot_cite_a_claim():
+    """The residual shares_a_term cannot reach.
+
+    That check drops a region naming nothing the claim names, which killed the
+    page-number sink because "8" shares no term with a sentence about metrics.
+    It does not catch a numeric COINCIDENCE: "Figure 8 shows the pipeline" and a
+    page-number region reading "8" do share the term "8".
+    """
+    from visual_verify.agent.reader import carries_enough_to_cite, shares_a_term
+
+    claim = "Figure 8 shows the overall pipeline."
+
+    # The coincidence really does get past the term check, which is why this
+    # second predicate exists at all.
+    assert shares_a_term(claim, "8") is True
+    assert carries_enough_to_cite("8") is False
+
+
+def test_a_real_line_of_evidence_carries_enough():
+    from visual_verify.agent.reader import carries_enough_to_cite
+
+    assert carries_enough_to_cite("Evaluation on SlideVQA with three metrics") is True
+    # Two characters is the shortest thing kept. Measured over this corpus,
+    # two-character lines are both page numbers ("11") and real content ("42"),
+    # and no width threshold separates them, so the floor stops at one.
+    assert carries_enough_to_cite("42") is True
+
+
+def test_an_unknown_region_text_is_not_called_degenerate():
+    """Same rule as shares_a_term: a visual region can snap to a box with no
+    text layer, and an unjudgeable citation must not be treated as a bad one."""
+    from visual_verify.agent.reader import carries_enough_to_cite
+
+    assert carries_enough_to_cite(None) is True
+
+
+def test_whitespace_and_punctuation_only_regions_are_degenerate():
+    from visual_verify.agent.reader import carries_enough_to_cite
+
+    assert carries_enough_to_cite("   ") is False
+    assert carries_enough_to_cite(",") is False

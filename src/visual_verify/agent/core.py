@@ -25,7 +25,12 @@ from visual_verify.agent.events import (
     ClaimVerified,
     ReadingStarted,
 )
-from visual_verify.agent.reader import is_compound, read, shares_a_term
+from visual_verify.agent.reader import (
+    carries_enough_to_cite,
+    is_compound,
+    read,
+    shares_a_term,
+)
 from visual_verify.agent.rubric import SUPPORTED_FLOOR, abstention_score
 from visual_verify.agent.types import StructuredChat
 from visual_verify.agent.verifier import verify
@@ -257,7 +262,11 @@ def _answer_events(
         # wrong, and a citation nobody should trust is worse than no citation:
         # with regions empty the verifier returns insufficient_evidence and the
         # gate withholds the claim, which is the honest outcome.
-        cited = [r for r in regions if shares_a_term(text, r.text)]
+        cited = [
+            r
+            for r in regions
+            if shares_a_term(text, r.text) and carries_enough_to_cite(r.text)
+        ]
         regions = cited
 
         # The winning page's image, never pages[0]'s. verify() takes ONE image

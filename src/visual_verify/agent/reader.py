@@ -272,6 +272,45 @@ def _content_words(text: str) -> set[str]:
 _TERM = re.compile(r"[a-z0-9]+")
 
 
+def carries_enough_to_cite(region_text: str | None) -> bool:
+    """Whether a region holds enough text to be evidence for a whole sentence.
+
+    One character cannot be. A page number, a roman numeral, a list marker and a
+    stray comma are all single-character lines, and a claim is a sentence.
+
+    This is the residual `shares_a_term` cannot reach. That check drops a region
+    naming nothing the claim names, which killed the page-number sink because
+    "8" shares no term with a sentence about metrics. It does NOT catch a
+    numeric coincidence: a claim reading "Figure 8 shows the pipeline" and a
+    page-number region reading "8" share the term "8", so the region passes and
+    the claim is cited to the footer.
+
+    Deliberately lexical rather than geometric. Measured over the 1953 derived
+    line boxes in this corpus, the widest single-character line is 0.0145 of the
+    page width and the narrowest line of three or more characters is 0.0148, so
+    a width floor would separate them here. It would not survive a different
+    page size or render DPI, and it would also reject a legitimate short numeric
+    cell: two-character lines span 0.008 to 0.030 and include both page numbers
+    and real content, so no width threshold separates "11" the page number from
+    "42" the measurement.
+
+    KNOWN GAP, left open on purpose. A two-character page number that coincides
+    with a number in the claim still passes both checks. Closing that needs to
+    know a footer from a table cell, which is a layout question this project has
+    not asked yet, and guessing at it would reject real evidence to prevent a
+    failure nobody has observed. S7 should count how often a cited region is
+    shorter than its claim, which measures the whole family rather than this
+    corner of it.
+
+    Returns True when there is no text to judge, matching `shares_a_term`: a
+    visual region can snap to a box with no text layer, and an unjudgeable
+    citation must not be called fabricated.
+    """
+    if region_text is None:
+        return True
+    return len(region_text.strip()) > 1
+
+
 def shares_a_term(claim: str, region_text: str | None) -> bool:
     """Whether a region's text is plausibly about `claim` at all.
 
