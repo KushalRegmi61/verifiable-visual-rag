@@ -10,7 +10,7 @@ Pixel conversion happens only at the point of drawing.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 BBox = tuple[float, float, float, float]
 
@@ -96,7 +96,31 @@ class Answer(BaseModel):
     # harness needs both to compute confident-wrong against coverage, so an
     # abstained claim is marked rather than removed.
     claims: list[Claim] = Field(default_factory=list)
-    abstained_overall: bool = False
+
+    @computed_field
+    @property
+    def abstained_overall(self) -> bool:
+        """Whether the system is declining to answer, rather than answering.
+
+        Derived, not stored. It was a settable field that core.py filled in with
+        `all(c.abstained for c in claims)`, which is a DIFFERENT predicate from
+        the one `shown` filters on: `Claim.withheld` is also true for a claim
+        that never reached the verifier, because absence of a verdict is not a
+        passing verdict. So a set of unjudged claims produced nothing to show
+        and no abstention either, which is a state that is neither an answer nor
+        a refusal and has no rendering.
+
+        Nothing on the answer_stream path could reach it, since every claim
+        there gets a verdict, so `abstained` and `withheld` agreed by accident.
+        That is not a property worth resting a safety guarantee on, and this is
+        the same rule `Claim.withheld` follows: state it once, in the place both
+        readers already look.
+
+        Computed rather than validated on input so that no caller can record an
+        abstention the claims contradict. It stays in model_dump() output, so
+        the wire format is unchanged.
+        """
+        return not self.shown
 
     @property
     def shown(self) -> list["Claim"]:

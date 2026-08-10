@@ -78,7 +78,17 @@ def test_collections_default_to_empty():
     a = Answer(question="q?")
     assert c.regions == []
     assert a.claims == []
-    assert a.abstained_overall is False
+
+
+def test_an_answer_with_no_claims_abstains():
+    """An answer with nothing in it is a refusal, not a successful empty answer.
+
+    This used to assert False, because it was reading the stored field's
+    default. core.py meanwhile computed `not claims or ...`, which is True for
+    the same object, so the model and the only code that filled it in disagreed
+    about the empty case. Deriving it leaves one answer.
+    """
+    assert Answer(question="q?").abstained_overall is True
 
 
 def test_answer_shown_excludes_abstained_claims():
@@ -149,3 +159,31 @@ def test_shown_is_the_complement_of_withheld():
 
     assert answer.shown == [c for c in claims if not c.withheld]
     assert [c.text for c in answer.shown] == ["passes"]
+
+
+def test_an_answer_with_no_verdicts_abstains():
+    """THE test of the abstention flag.
+
+    A Claim that never reached the verifier defaults to abstained=False, so the
+    old rule, all(c.abstained for c in claims), called this a non-abstention
+    with nothing to show. Answer.shown reads Claim.withheld, which is broader on
+    purpose, so the two disagreed about the same set of claims. Nothing on the
+    answer_stream path can currently produce it, because every claim there gets
+    a verdict, but a contract that is only correct because of a caller's habits
+    is one refactor from being wrong.
+    """
+    unverified = Claim(text="never judged", confidence=0.0)
+    answer = Answer(question="q", claims=[unverified])
+
+    assert answer.shown == []
+    assert answer.abstained_overall is True
+
+
+def test_the_abstention_flag_cannot_be_set_against_the_claims():
+    """It is derived, not stored, so no caller can record an abstention the
+    claims contradict or hide one they imply. Constructing it by hand was how
+    the two spellings of the rule drifted in the first place."""
+    passes = Claim(text="passes", confidence=0.9, label="supported")
+
+    assert Answer(question="q", claims=[passes]).abstained_overall is False
+    assert Answer(question="q", claims=[passes], abstained_overall=True).abstained_overall is False

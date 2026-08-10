@@ -212,39 +212,36 @@ it did not.
 | Partial | lead shown, at least one claim withheld | the joined paragraph, plus a withheld count |
 | Abstained | lead withheld, or no claims at all | the decline, plus surviving claims reframed as context |
 
-`Answer.abstained_overall` gains the lead condition, and it has to be fixed
-first, because it is already computed from the wrong predicate.
+`Answer.abstained_overall` gains the lead condition. Half of this was already
+fixed on 2026-08-10, ahead of this spec, and the rest builds on that fix.
 
-`core.py` line 164 has:
+**Already done.** `abstained_overall` was a stored field that `core.py` filled
+in with `all(c.abstained for c in claims)`, a different predicate from the
+`Claim.withheld` that `Answer.shown` filters on. `withheld` is broader by
+design: it is also true when no verdict exists, because absence of a verdict is
+not a passing verdict. The model's own default said `False` for an empty answer
+while `core.py` computed `True` for the same object. It is now a `computed_field`
+returning `not self.shown`, so the rule is stated once and no caller can record
+an abstention the claims contradict.
 
-```python
-abstained_overall = not claims or all(c.abstained for c in claims)
-```
+That defect was **latent, not live**. Every claim on the `answer_stream` path
+gets a verdict, so `abstained` and `withheld` agreed by accident and no bad
+screen was reachable. It was worth fixing because a safety guarantee resting on
+a caller's habits is one refactor from being wrong, not because it was
+misbehaving.
 
-`Answer.shown` filters on `Claim.withheld`, which is deliberately broader:
-`withheld` is true when the verifier rejected the claim AND when no verdict
-exists at all, because a `Claim` that never reached the verifier defaults to
-`abstained=False` and absence of a verdict is not a passing verdict. So a set of
-claims that all failed to reach the verifier yields `shown == []` and
-`abstained_overall == False`. The UI then renders neither the abstain panel nor
-any claims, which is one of the routes to the "No claims to show" dead end in
-section 2. `test_done_counts_use_shown_not_the_abstained_flag` already pins the
-same distinction one layer up, at the wire, so the wire is right and the core is
-not.
-
-Both conditions therefore move onto `Answer`, stated once, next to `shown`:
+**Still to do.** The lead condition joins it in the same property:
 
 ```python
+@computed_field
 @property
-def abstained(self) -> bool:
-    shown = self.shown
-    return not shown or (bool(self.claims) and self.claims[0].withheld)
+def abstained_overall(self) -> bool:
+    return not self.shown or (bool(self.claims) and self.claims[0].withheld)
 ```
 
-The lead is `claims[0]`, and `claims` holds every claim in drafted order,
+The lead is `claims[0]`, and `claims` holds every claim in drafted order
 including withheld ones, so the lead is still identifiable after the gate has
-removed it. `abstained_overall` stays on the model as the serialized field and
-is assigned from this property, so the wire format does not change.
+removed it.
 
 ## 9. What fixed copy is allowed to say
 
@@ -355,11 +352,11 @@ Unit, no network:
 - `Answer.abstained_overall` is true when the lead is withheld and supporting
   claims passed. This is the lead rule, and it is the one behaviour a reviewer
   is most likely to consider a bug.
-- `Answer.abstained_overall` is true when every claim is unverified, meaning
-  `label is None` and `abstained is False`. This fails against the current
-  `all(c.abstained for c in claims)` and is the section 8 defect. Build the
-  claims with no verdict rather than by setting a flag, so the test exercises
-  the real path into that state.
+- `Answer.abstained_overall` is true when every claim is unverified. Already
+  written as `test_an_answer_with_no_verdicts_abstains`, along with
+  `test_an_answer_with_no_claims_abstains` and
+  `test_the_abstention_flag_cannot_be_set_against_the_claims`. Restoring the old
+  predicate fails the first of the three, checked by mutation.
 - `wire.py` emits `starts_paragraph`, and a withheld claim still carries no
   regions.
 

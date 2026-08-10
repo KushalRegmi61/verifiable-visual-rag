@@ -158,11 +158,11 @@ def _answer_events(
         yield ClaimVerified(index=index, claim=claim)
 
     yield AnswerComplete(
-        answer=Answer(
-            question=question,
-            claims=claims,
-            abstained_overall=not claims or all(c.abstained for c in claims),
-        )
+        # abstained_overall is derived on Answer from the same predicate
+        # `shown` filters on, so it is not passed here. It used to be computed
+        # as all(c.abstained ...), which disagrees with Claim.withheld for a
+        # claim that never reached the verifier.
+        answer=Answer(question=question, claims=claims)
     )
 
 
