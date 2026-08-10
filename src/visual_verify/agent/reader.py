@@ -37,13 +37,16 @@ so the sentences must obey four rules.
 
 3. Each sentence stands on its own. Never refer back to the previous sentence
    or to anything above. No sentence may begin with it, its, they, them,
-   their, such, that, these, or those, and no sentence may begin with a
+   their, such, this, that, these, or those, and no sentence may begin with a
    connective such as Additionally, Also, However, Therefore, Instead,
    Furthermore, Moreover, Hence, or Consequently. No sentence may use a
    pronoun whose meaning is only in an earlier sentence. Repeat the noun
-   instead. Pointing at what you are looking at is fine, because it does not
-   depend on any other sentence: "This page", "This figure", "This table" all
-   stand on their own.
+   instead. The one exception is pointing at what you are looking at, which
+   depends on no other sentence: this, these, those and that are allowed only
+   when the very next word is page, document, slide, figure, table, chart,
+   section or paragraph, as in "This page", "This figure", "This table".
+   "These three metrics" is not allowed, because the metrics were named in an
+   earlier sentence.
 
 4. Connect each sentence to the one before it by repeating a noun phrase from
    the end of that sentence, never by a pronoun. "The evaluation compares three

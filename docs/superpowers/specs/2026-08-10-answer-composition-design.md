@@ -89,6 +89,29 @@ measured as intersection over union against the annotated region.
 A topic jump, and nothing worse. The cost is mild repetitiveness, which is how
 careful technical writing reads anyway.
 
+**Measured: rule 4 is not landing, and the check cannot tell.** The three
+claims shipped for "What is the evaluation methodology?" on proposal.pdf page
+14 all open with "The evaluation". That is SUBJECT repetition, which is
+parallel-list construction, and it is the shape rule 4 exists to prevent. Rule
+4 asks for a noun phrase repeated from the END of the previous sentence, so
+that the topic moves forward the way it does in the example above. What is
+actually happening is rule 3 (no anaphora) producing a repeated subject, and
+`shares_content_word` scoring it as chained because word overlap cannot
+distinguish "carried the topic forward" from "started every sentence the same
+way". Its own docstring already warns about that overcount.
+
+Two consequences. The chaining floor in
+`test_the_drafted_answer_holds_together` is weaker evidence than it reads as:
+it passes on a parallel list. And no word-overlap function can ever measure the
+difference, so tightening the floor will not help; distinguishing the two needs
+position (did the opening noun phrase come from the END of the predecessor) at
+minimum, and arguably a parser. Chaining also varies run to run on a live
+model: two runs of the same question against the same model on the same page
+gave 1 of 3 adjacent pairs chained and then 2 of 2. Given-new chaining is
+therefore ASPIRED TO by this design and not yet demonstrated by it. The
+sentences do survive deletion, which is the property the verification gate
+actually needs, and that part holds.
+
 ## 5. The four reader rules
 
 1. **The first claim answers the question directly.** Not context, not what the

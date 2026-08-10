@@ -150,6 +150,21 @@ def _methodology_page() -> Path:
     under its document's sha256 and that hash changes whenever the proposal is
     recompiled. Skips instead of failing when the document is not ingested, so
     a fresh clone still runs.
+
+    `settings.pages_dir`, not the module-level FIXTURE constant. FIXTURE is the
+    default `data/pages` under the repo root, so under a non-default
+    VVRAG_DATA_DIR the database row would be found and the PNG would not, and a
+    fully ingested machine would skip with "not rendered". The setting is where
+    ingest actually wrote.
+
+    The ordering is load-bearing, not tidiness. `sha256` is the primary key and
+    `path` is NOT unique, so recompiling the proposal and re-ingesting leaves
+    two rows with the same path and different hashes, and old renders are never
+    deleted. An unordered select would then hand back whichever row the engine
+    happened to return, and the likely outcome is not a skip: it is this test
+    passing GREEN against page 14 of a STALE build, asserting drafting rules
+    on a page the current proposal no longer has. Newest first, by created_at,
+    with sha256 breaking a tie so the result is deterministic.
     """
     import sqlalchemy as sa
 
@@ -157,11 +172,13 @@ def _methodology_page() -> Path:
 
     settings = Settings.from_env()
     with make_engine(settings.db_url).connect() as conn:
-        rows = conn.execute(sa.text("select sha256, path from documents")).all()
+        rows = conn.execute(
+            sa.text("select sha256, path from documents order by created_at desc, sha256 desc")
+        ).all()
 
     for sha, path in rows:
         if str(path).endswith("proposal_report/proposal.pdf"):
-            page = FIXTURE / sha / "p0014.png"
+            page = settings.pages_dir / sha / "p0014.png"
             if not page.exists():
                 pytest.skip(f"{page} is not rendered; run `vvrag ingest` first")
             return page
@@ -190,12 +207,14 @@ def test_a_multi_part_answer_is_not_collapsed_into_one_claim():
     can still assert two things, so do not read either assertion as proof of
     atomicity.
 
-    Chaining is deliberately NOT asserted here. Measured on this question with
-    the fixed prompt: 4 claims, 1 of 3 adjacent pairs sharing a content word,
-    which is over the floor the other test uses. That is a real property of a
-    metrics-then-ablation answer rather than a stemmer artifact (the unchained
-    pairs share nothing at all), and pinning it would fail this test for a
-    reason it does not exist to police.
+    Chaining is deliberately NOT asserted here, because it is not stable
+    enough across runs to pin. Two runs of this exact question against the same
+    model on the same page: one gave 4 claims with 1 of 3 adjacent pairs
+    sharing a content word, which is over the floor the other test uses, and
+    the next gave 3 claims with 2 of 2 pairs sharing one, which passes
+    comfortably. Same prompt, same page, same model, opposite verdicts. An
+    assertion here would be a coin flip reported as a regression, so the rate
+    is worth measuring by hand and not worth failing a build on.
     """
     from visual_verify.agent.models import make_chat
     from visual_verify.agent.reader import is_compound, opens_with_anaphora, read
