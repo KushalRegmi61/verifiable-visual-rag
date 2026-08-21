@@ -103,15 +103,20 @@ uv run vvrag ask "<question>" --doc <sha> --page <n> --threshold 4.0   # admit p
 
 The reader and the verifier must be **different models**. A model grading its own
 output is biased toward it, so the separation is what makes the verification mean
-anything. Two different vendors makes that true by construction:
+anything. A different vendor makes that true by construction; the current default
+uses two OpenAI models of different sizes instead, because no Google API key is
+provisioned yet. That is a weaker independence guarantee (shared training
+pipeline and RLHF), so switch the verifier to a different vendor
+(`VVRAG_VERIFIER_PROVIDER=google`, `VVRAG_VERIFIER_MODEL=gemini-2.0-flash`) once
+`GOOGLE_API_KEY` is available:
 
 ```bash
-VVRAG_READER_PROVIDER=openai      VVRAG_READER_MODEL=gpt-4o
-VVRAG_VERIFIER_PROVIDER=google    VVRAG_VERIFIER_MODEL=gemini-2.0-flash
+VVRAG_READER_PROVIDER=openai      VVRAG_READER_MODEL=gpt-5-mini
+VVRAG_VERIFIER_PROVIDER=openai    VVRAG_VERIFIER_MODEL=gpt-5-nano
 ```
 
-`OPENAI_API_KEY` and `GOOGLE_API_KEY` go in `.env`, which is gitignored. Both
-models are sent a page image, so both must be vision-capable.
+`OPENAI_API_KEY` goes in `.env`, which is gitignored. Both models are sent a
+page image, so both must be vision-capable.
 
 Any OpenAI-shaped gateway works as a third provider, so the vendor is an
 environment variable rather than a code change. OpenRouter, Groq, Together,

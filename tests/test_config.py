@@ -38,6 +38,29 @@ def test_qdrant_url_defaults_to_none(monkeypatch):
     assert Settings.from_env().qdrant_url is None
 
 
+def test_verifier_api_keys_collects_the_pool_with_the_single_key_first(monkeypatch):
+    """VVRAG_VERIFIER_API_KEY must stay index 0 so an existing single-key
+    deployment tries the same key first, and a key repeated in KEY_1..KEY_6
+    must not be tried twice while a distinct one is starved."""
+    monkeypatch.setenv("VVRAG_VERIFIER_API_KEY", "primary")
+    monkeypatch.setenv("KEY_1", "primary")
+    monkeypatch.setenv("KEY_2", "second")
+    monkeypatch.delenv("KEY_3", raising=False)
+    monkeypatch.delenv("KEY_4", raising=False)
+    monkeypatch.delenv("KEY_5", raising=False)
+    monkeypatch.delenv("KEY_6", raising=False)
+
+    assert Settings.from_env().verifier_api_keys == ("primary", "second")
+
+
+def test_verifier_api_keys_is_empty_with_nothing_set(monkeypatch):
+    monkeypatch.delenv("VVRAG_VERIFIER_API_KEY", raising=False)
+    for i in range(1, 7):
+        monkeypatch.delenv(f"KEY_{i}", raising=False)
+
+    assert Settings.from_env().verifier_api_keys == ()
+
+
 def test_env_overrides_min_text_page_ratio(monkeypatch):
     monkeypatch.setenv("VVRAG_MIN_TEXT_PAGE_RATIO", "0.8")
     assert Settings.from_env().min_text_page_ratio == 0.8

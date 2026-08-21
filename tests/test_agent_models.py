@@ -148,6 +148,108 @@ def test_a_base_url_with_a_non_compatible_provider_is_refused(monkeypatch):
     assert "VVRAG_READER_PROVIDER" in str(exc.value)
 
 
+def test_verifier_rotates_through_the_key_pool_on_a_rate_limit(monkeypatch):
+    """A 429 on key N must retry the SAME request on key N+1, not raise. This
+    is the whole reason for the KEY_1..KEY_6 pool: one Groq account's per-key
+    limit must not abort a verifier call another key in the same pool would
+    have served."""
+    import httpx
+    from openai import RateLimitError
+
+    from visual_verify.agent.models import LangChainChat
+
+    calls: list[str] = []
+
+    class FakeChain:
+        def __init__(self, key: str) -> None:
+            self._key = key
+
+        def with_structured_output(self, schema):
+            return self
+
+        def with_retry(self, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            calls.append(self._key)
+            if self._key != "good-key":
+                response = httpx.Response(429, request=httpx.Request("POST", "https://x"))
+                raise RateLimitError("rate limited", response=response, body=None)
+            return "ok"
+
+    monkeypatch.setattr(LangChainChat, "_build_llm", lambda self, api_key: FakeChain(api_key))
+
+    chat = LangChainChat(
+        "openai_compatible",
+        "m",
+        base_url="https://api.groq.com/openai/v1",
+        api_keys=["bad-1", "bad-2", "good-key"],
+    )
+
+    assert chat.structured("prompt", [], schema=None) == "ok"
+    assert calls == ["bad-1", "bad-2", "good-key"]
+
+
+def test_verifier_reraises_once_the_whole_key_pool_is_rate_limited(monkeypatch):
+    """Every key exhausted must fail loudly, not return silently with no
+    answer: a caller expecting an exception on total failure must get one."""
+    import httpx
+    from openai import RateLimitError
+
+    from visual_verify.agent.models import LangChainChat
+
+    class AlwaysLimited:
+        def with_structured_output(self, schema):
+            return self
+
+        def with_retry(self, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            response = httpx.Response(429, request=httpx.Request("POST", "https://x"))
+            raise RateLimitError("rate limited", response=response, body=None)
+
+    monkeypatch.setattr(LangChainChat, "_build_llm", lambda self, api_key: AlwaysLimited())
+
+    chat = LangChainChat(
+        "openai_compatible",
+        "m",
+        base_url="https://api.groq.com/openai/v1",
+        api_keys=["bad-1", "bad-2"],
+    )
+
+    with pytest.raises(RateLimitError):
+        chat.structured("prompt", [], schema=None)
+
+
+def test_make_chat_wires_the_verifier_key_pool_from_settings(monkeypatch):
+    """Settings.verifier_api_keys, not just VVRAG_VERIFIER_API_KEY, must reach
+    the client the verifier actually calls, or the pool is collected for
+    nothing."""
+    from visual_verify.agent.models import LangChainChat, make_chat
+    from visual_verify.config import Settings
+
+    captured: dict = {}
+    original_init = LangChainChat.__init__
+
+    def spy_init(self, provider, model, base_url=None, api_key=None, api_keys=None):
+        captured["api_keys"] = api_keys
+        original_init(self, provider, model, base_url=base_url, api_key=api_key, api_keys=api_keys)
+
+    monkeypatch.setattr(LangChainChat, "__init__", spy_init)
+
+    settings = Settings(
+        verifier_provider="openai_compatible",
+        verifier_model="qwen/qwen3.6-27b",
+        verifier_base_url="https://api.groq.com/openai/v1",
+        verifier_api_keys=("k1", "k2", "k3"),
+    )
+
+    make_chat("verifier", settings)
+
+    assert captured["api_keys"] == ["k1", "k2", "k3"]
+
+
 def test_the_other_role_is_unaffected_by_a_base_url(monkeypatch):
     """The guard reads the per-role variable, so a reader base_url must not
     refuse the verifier."""

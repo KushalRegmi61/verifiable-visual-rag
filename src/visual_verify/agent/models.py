@@ -93,21 +93,57 @@ class MissingApiKey(RuntimeError):
     """The provider's key variable is unset."""
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """True for a 429 from the openai SDK that langchain_openai raises through.
+
+    Import is function-local like every other client import in this file: this
+    check must work whether or not `openai` happens to be installed under
+    whatever provider is active, and it must not become the thing that drags
+    the dependency into a process that never configured a compatible endpoint.
+    """
+    try:
+        from openai import RateLimitError
+    except ImportError:  # pragma: no cover - openai ships with langchain_openai
+        RateLimitError = ()  # type: ignore[assignment]
+    if isinstance(exc, RateLimitError):
+        return True
+    return getattr(exc, "status_code", None) == 429
+
+
 class LangChainChat:
     """StructuredChat backed by a LangChain chat model."""
 
     def __init__(
-        self, provider: str, model: str, base_url: str | None = None, api_key: str | None = None
+        self,
+        provider: str,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_keys: list[str] | None = None,
     ) -> None:
         self._model_id = model_id(provider, model, base_url)
+        self._provider = provider
+        self._model = model
+        self._base_url = base_url
+        # api_keys is the Groq-rotation pool (verifier only, see make_chat); a
+        # bare api_key is the single-key path every other caller still uses.
+        # Normalized to one list so structured() has one rotation code path
+        # regardless of which one was given, even though a length-1 pool never
+        # actually rotates.
+        self._api_keys = list(api_keys) if api_keys else [api_key]
+        self._key_index = 0
+        self._llm = self._build_llm(self._api_keys[0])
+
+    def _build_llm(self, api_key: str | None):
+        provider, model, base_url = self._provider, self._model, self._base_url
         if provider == "openai":
             from langchain_openai import ChatOpenAI
 
-            self._llm = ChatOpenAI(model=model, temperature=0)
+            return ChatOpenAI(model=model, temperature=0)
         elif provider == "google":
             from langchain_google_genai import ChatGoogleGenerativeAI
 
-            self._llm = ChatGoogleGenerativeAI(model=model, temperature=0)
+            return ChatGoogleGenerativeAI(model=model, temperature=0)
         elif provider == COMPATIBLE:
             from langchain_openai import ChatOpenAI
 
@@ -119,9 +155,13 @@ class LangChainChat:
             # prompt-and-parse, which is the correctly-shaped wrong output this
             # whole layer exists to prevent. Pick a vision model that supports
             # tools, and confirm it on a real call rather than assuming.
-            self._llm = ChatOpenAI(model=model, temperature=0, base_url=base_url, api_key=api_key)
+            return ChatOpenAI(model=model, temperature=0, base_url=base_url, api_key=api_key)
         else:  # pragma: no cover - guarded by make_chat
             raise UnknownProvider(provider)
+
+    def _rotate_key(self) -> None:
+        self._key_index = (self._key_index + 1) % len(self._api_keys)
+        self._llm = self._build_llm(self._api_keys[self._key_index])
 
     @property
     def model_id(self) -> str:
@@ -138,15 +178,32 @@ class LangChainChat:
             content.append(
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
             )
-        # with_structured_output is why LangChain earns its weight here: one
-        # call gives schema-validated output on both providers, so a malformed
-        # response raises instead of parsing into something plausible.
-        # with_retry covers a transient schema-invalid response, which spec
-        # section 10 requires. It retries and then raises: it never coerces a
-        # bad response into a valid-looking object, because a silently
-        # mis-parsed claim list is the failure this whole layer exists to stop.
-        chain = self._llm.with_structured_output(schema).with_retry(stop_after_attempt=3)
-        return chain.invoke([{"role": "user", "content": content}])
+        messages = [{"role": "user", "content": content}]
+
+        # One attempt per key in the pool. A 429 rotates to the next Groq key
+        # and retries the SAME request; anything else (schema-invalid,
+        # timeout) is left to with_retry below and never rotates a key, because
+        # those are not the failure a second account fixes. The last key's
+        # exception propagates rather than being swallowed, so a pool that is
+        # entirely rate-limited still fails loudly instead of returning nothing.
+        for attempt in range(len(self._api_keys)):
+            # with_structured_output is why LangChain earns its weight here:
+            # one call gives schema-validated output on both providers, so a
+            # malformed response raises instead of parsing into something
+            # plausible. with_retry covers a transient schema-invalid
+            # response, which spec section 10 requires. It retries and then
+            # raises: it never coerces a bad response into a valid-looking
+            # object, because a silently mis-parsed claim list is the failure
+            # this whole layer exists to stop.
+            chain = self._llm.with_structured_output(schema).with_retry(stop_after_attempt=3)
+            try:
+                return chain.invoke(messages)
+            except Exception as exc:
+                is_last = attempt == len(self._api_keys) - 1
+                if is_last or not _is_rate_limit(exc):
+                    raise
+                self._rotate_key()
+        raise AssertionError("unreachable: loop above always returns or raises")  # pragma: no cover
 
 
 def make_chat(role: str, settings: Settings) -> LangChainChat:
@@ -186,6 +243,15 @@ def make_chat(role: str, settings: Settings) -> LangChainChat:
                 f"{_role_var(role, 'PROVIDER')} is {COMPATIBLE!r} but "
                 f"{_role_var(role, 'BASE_URL')} is not set, so there is no endpoint to call"
             )
+        # The verifier gets the KEY_1..KEY_6 rotation pool when one was
+        # collected (Settings._verifier_api_keys already folds
+        # VVRAG_VERIFIER_API_KEY into it as the first entry); every other
+        # role/provider combination keeps the single-key path unchanged.
+        if role == "verifier" and settings.verifier_api_keys:
+            return LangChainChat(
+                provider, model, base_url=base_url, api_keys=list(settings.verifier_api_keys)
+            )
+
         key_var = _role_var(role, "API_KEY")
         api_key = os.getenv(key_var)
         if not api_key:

@@ -45,6 +45,24 @@ DEFAULT_TEXT_PAGE_RATIO = 0.6
 DEFAULT_CORS_ORIGIN = "http://localhost:3000"
 
 
+def _verifier_api_keys() -> tuple[str, ...]:
+    """VVRAG_VERIFIER_API_KEY plus the KEY_1..KEY_6 Groq rotation pool.
+
+    Deduplicated and order-preserving: a key repeated between the single-key
+    variable and the pool must not be tried twice while every other key is
+    starved of a retry.
+    """
+    keys: list[str] = []
+    primary = os.getenv("VVRAG_VERIFIER_API_KEY")
+    if primary:
+        keys.append(primary)
+    for i in range(1, 7):
+        key = os.getenv(f"KEY_{i}")
+        if key and key not in keys:
+            keys.append(key)
+    return tuple(keys)
+
+
 def _origins(raw: str | None) -> tuple[str, ...]:
     """Comma-separated origins, or the development default.
 
@@ -68,9 +86,9 @@ class Settings:
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     reader_provider: str = "openai"
-    reader_model: str = "gpt-4o"
-    verifier_provider: str = "google"
-    verifier_model: str = "gemini-2.0-flash"
+    reader_model: str = "gpt-5-mini"
+    verifier_provider: str = "openai"
+    verifier_model: str = "gpt-5-nano"
     # Only for the `openai_compatible` provider: the endpoint an OpenAI-shaped
     # gateway serves. This is what makes the vendor a runtime choice rather than
     # a code change, so a project with no Gemini credit can point the verifier
@@ -78,6 +96,13 @@ class Settings:
     # independent, which is the whole reason S5 uses two of them.
     reader_base_url: str | None = None
     verifier_base_url: str | None = None
+    # Multiple Groq keys (same account) for the verifier's openai_compatible
+    # client to rotate through on a 429. Groq's per-key rate limit is what
+    # forces this, not a second vendor, so it lives beside verifier_base_url
+    # rather than becoming a third provider. Order matters: VVRAG_VERIFIER_API_KEY
+    # first (existing single-key deployments keep behaving identically), then
+    # KEY_1..KEY_6 as the pool to fail over into.
+    verifier_api_keys: tuple[str, ...] = ()
     # Browser origins the API accepts. The frontend's own API base is already an
     # environment variable (NEXT_PUBLIC_API), so pinning this side to one
     # hardcoded origin made the pair unconfigurable: a UI anywhere but
@@ -99,11 +124,12 @@ class Settings:
             qdrant_url=os.getenv("VVRAG_QDRANT_URL"),
             qdrant_api_key=os.getenv("VVRAG_QDRANT_API_KEY"),
             reader_provider=os.getenv("VVRAG_READER_PROVIDER", "openai"),
-            reader_model=os.getenv("VVRAG_READER_MODEL", "gpt-4o"),
-            verifier_provider=os.getenv("VVRAG_VERIFIER_PROVIDER", "google"),
-            verifier_model=os.getenv("VVRAG_VERIFIER_MODEL", "gemini-2.0-flash"),
+            reader_model=os.getenv("VVRAG_READER_MODEL", "gpt-5-mini"),
+            verifier_provider=os.getenv("VVRAG_VERIFIER_PROVIDER", "openai"),
+            verifier_model=os.getenv("VVRAG_VERIFIER_MODEL", "gpt-5-nano"),
             reader_base_url=os.getenv("VVRAG_READER_BASE_URL"),
             verifier_base_url=os.getenv("VVRAG_VERIFIER_BASE_URL"),
+            verifier_api_keys=_verifier_api_keys(),
             cors_origins=_origins(os.getenv("VVRAG_CORS_ORIGINS")),
             abstain_threshold=_finite_float("VVRAG_ABSTAIN_THRESHOLD", SUPPORTED_FLOOR),
         )
